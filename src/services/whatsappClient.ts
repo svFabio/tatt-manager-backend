@@ -1,0 +1,687 @@
+// WhatsApp Multi-Tenant Bot — un socket por negocio, instanciado on-demand
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys';
+import { usePrismaAuthState, clearAuthState } from './baileysAuth';
+import { Boom } from '@hapi/boom';
+import pino from 'pino';
+import { Server } from 'socket.io';
+import { PrismaClient } from '@prisma/client';
+import { v2 as cloudinary } from 'cloudinary';
+import { ContextoConversacion, EstadoConversacion, evaluarIntencion } from './aiService';
+import * as chrono from 'chrono-node';
+import { MAX_BOTS_ACTIVOS } from '../config';
+
+const prisma = new PrismaClient();
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// ─── Tipos de config del bot ─────────────────────────────────────────────────
+type ServicioItem = { nombre: string; precio: number };
+type HorariosMap = Record<string, string[]>; // { lunes: ['09:00','10:00'], ... }
+
+// Dias de la semana en español (mismo indice que Date.getDay())
+const DIA_SEMANA = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+
+// Obtiene (o crea con defaults) la configuracion del negocio
+async function getConfigNegocio(negocioId: number) {
+    let config = await prisma.configuracion.findUnique({ where: { negocioId } });
+    if (!config) {
+        config = await prisma.configuracion.create({ data: { negocioId } });
+    }
+    return {
+        trigger: config.trigger,
+        mensajeBienvenida: config.mensajeBienvenida,
+        mensajeConfirmacion: config.mensajeConfirmacion,
+        servicios: config.servicios as unknown as ServicioItem[],
+        horarios: config.horarios as unknown as HorariosMap,
+        cobrarAdelanto: config.cobrarAdelanto,
+        porcentajeAdelanto: config.porcentajeAdelanto,
+    };
+}
+
+// ─── Helpers de horarios (con scope por negocio) ─────────────────────────────
+async function getHorariosOcupados(negocioId: number, fecha: Date): Promise<string[]> {
+    const inicioDia = new Date(fecha); inicioDia.setHours(0, 0, 0, 0);
+    const finDia = new Date(fecha); finDia.setHours(23, 59, 59, 999);
+
+    const citas = await prisma.cita.findMany({
+        where: {
+            negocioId,
+            fecha: { gte: inicioDia, lte: finDia },
+            estado: { in: ['CONFIRMADA', 'VALIDACION_PENDIENTE'] }
+        },
+        select: { horario: true }
+    });
+    return citas.map(c => c.horario);
+}
+
+async function getHorariosDisponibles(negocioId: number, fecha: Date): Promise<string[]> {
+    const ocupados = await getHorariosOcupados(negocioId, fecha);
+    const config = await getConfigNegocio(negocioId);
+    const diaNombre = DIA_SEMANA[fecha.getDay()];
+    const horariosDelDia: string[] = config.horarios[diaNombre] ?? [];
+    return horariosDelDia.filter(h => !ocupados.includes(h));
+}
+
+interface BotInstance {
+    sock: ReturnType<typeof makeWASocket>;
+    conectado: boolean;
+    qr: string | null;
+    intentos: number;
+    io: Server;
+    lidToPhone: Map<string, string>;
+}
+
+// ─── Mapa global: negocioId → BotInstance ────────────────────────────────────
+const bots = new Map<number, BotInstance>();
+
+
+// ─── Resolver LID → número real ──────────────────────────────────────────────
+export const resolverTelefonoReal = (jid: string, negocioId?: number): string => {
+    const numero = jid.split('@')[0];
+    const suffix = jid.split('@')[1];
+    if (suffix === 'lid' && negocioId) {
+        const bot = bots.get(negocioId);
+        const real = bot?.lidToPhone.get(numero);
+        if (real) return real;
+    }
+    return numero;
+};
+
+// ─── Función principal: iniciar bot para un negocio ──────────────────────────
+export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Promise<{ error?: string }> => {
+    // Ya está corriendo
+    if (bots.has(negocioId)) {
+        const bot = bots.get(negocioId)!;
+        io.emit(`whatsapp-status-${negocioId}`, { conectado: bot.conectado, qr: bot.qr });
+        return {};
+    }
+
+    // Verificar límite
+    if (bots.size >= MAX_BOTS_ACTIVOS) {
+        console.warn(`[Bot] ⚠️ Límite de bots activos alcanzado (${MAX_BOTS_ACTIVOS}). Negocio ${negocioId} no puede iniciar.`);
+        return { error: `Límite de bots activos alcanzado (máximo ${MAX_BOTS_ACTIVOS}). Contacta al soporte para ampliar el límite.` };
+    }
+
+    const sessionId = `negocio-${negocioId}`;
+    const { state, saveCreds } = await usePrismaAuthState(sessionId);
+    const { version } = await fetchLatestBaileysVersion();
+
+    console.log(`[Bot:${negocioId}] Iniciando con Baileys v${version.join('.')}...`);
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'silent' }),
+        auth: state,
+        browser: [`Negocio-${negocioId} Bot`, 'Chrome', '1.0.0'],
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000,
+        emitOwnEvents: false,
+    });
+
+    const instance: BotInstance = {
+        sock,
+        conectado: false,
+        qr: null,
+        intentos: 0,
+        io,
+        lidToPhone: new Map()
+    };
+    bots.set(negocioId, instance);
+
+    // ─── Eventos de conexión ───────────────────────────────────────────────
+    sock.ev.on('connection.update', async (update) => {
+        const bot = bots.get(negocioId);
+        if (!bot) return;
+
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            console.log(`[Bot:${negocioId}] Nuevo QR generado`);
+            bot.qr = qr;
+            bot.conectado = false;
+            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr });
+        }
+
+        if (connection === 'close') {
+            const reason = (lastDisconnect?.error as Boom)?.output?.statusCode;
+            const shouldReconnect = reason !== DisconnectReason.loggedOut;
+
+            console.error(`[Bot:${negocioId}] Conexión cerrada. Razón: ${reason}`);
+            bot.conectado = false;
+            bot.qr = null;
+            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null });
+
+            if (shouldReconnect) {
+                if (bot.intentos < 5) {
+                    bot.intentos++;
+                    console.log(`[Bot:${negocioId}] Reintentando (${bot.intentos}/5)...`);
+                    bots.delete(negocioId);
+                    setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 3000);
+                } else {
+                    console.error(`[Bot:${negocioId}] Demasiados intentos fallidos.`);
+                    bots.delete(negocioId);
+                }
+            } else {
+                console.log(`[Bot:${negocioId}] Logout permanente. Limpiando sesión...`);
+                bots.delete(negocioId);
+                await clearAuthState(sessionId);
+                console.log(`[Bot:${negocioId}] Reiniciando para nuevo QR...`);
+                iniciarWhatsAppNegocio(negocioId, io);
+            }
+        } else if (connection === 'open') {
+            console.log(`[Bot:${negocioId}] ✅ Conectado a WhatsApp!`);
+            bot.conectado = true;
+            bot.qr = null;
+            bot.intentos = 0;
+            io.emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null });
+        }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('lid-mapping.update', ({ lid, pn }: { lid: string; pn: string }) => {
+        const bot = bots.get(negocioId);
+        if (!bot) return;
+        const lidNum = lid.split('@')[0];
+        const pnNum = pn.split('@')[0];
+        bot.lidToPhone.set(lidNum, pnNum);
+    });
+
+    // ─── Manejo de mensajes ───────────────────────────────────────────────
+    sock.ev.on('messages.upsert', async (m) => {
+        if (m.type !== 'notify') return;
+
+        for (const msg of m.messages) {
+            if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') continue;
+
+            const remoteJid = msg.key.remoteJid!;
+            if (remoteJid.endsWith('@g.us')) continue;
+
+            const textMessage = msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                msg.message.imageMessage?.caption || '';
+            const hasImage = !!msg.message.imageMessage;
+
+            console.log(`[Bot:${negocioId}] 📨 Mensaje de ${remoteJid}: ${textMessage || '[IMAGEN]'}`);
+
+            // Guardar mensaje entrante
+            try {
+                const msgGuardado = await prisma.mensajeChat.create({
+                    data: { negocioId, remoteJid, contenido: textMessage || '[IMAGEN]', direccion: 'ENTRANTE' }
+                });
+                io.emit('nuevo-mensaje', msgGuardado);
+            } catch (dbErr) {
+                console.error(`[Bot:${negocioId}] Error guardando msg entrante:`, dbErr);
+            }
+
+            const isActivatingSession = textMessage.trim().toLowerCase().startsWith(
+                (await getConfigNegocio(negocioId)).trigger.toLowerCase()
+            );
+
+            let sesion = await prisma.sesionChat.findFirst({
+                where: { id: remoteJid, negocioId }
+            });
+
+            if (!sesion && !isActivatingSession) continue;
+            if (sesion && isActivatingSession) continue;
+
+            if (!sesion && isActivatingSession) {
+                try {
+                    sesion = await prisma.sesionChat.create({
+                        data: { id: remoteJid, negocioId, estado: 'INICIO', datos: { servicio: 'Spa' }, ultimoMensaje: new Date() }
+                    });
+                } catch (err) {
+                    console.error(`[Bot:${negocioId}] Error creando sesión:`, err);
+                    continue;
+                }
+            }
+
+            if (!sesion) continue;
+
+            const contexto: ContextoConversacion = {
+                estado: sesion.estado as EstadoConversacion,
+                datos: sesion.datos as unknown as ContextoConversacion['datos'],
+                intentosAclaracion: 0
+            };
+
+            const botInstance = bots.get(negocioId);
+            if (!botInstance) continue;
+
+            try {
+                await botInstance.sock.sendPresenceUpdate('composing', remoteJid);
+
+                const cmd = textMessage.trim().toLowerCase();
+                if (['cancelar', 'salir', 'adios', 'reiniciar', 'chau'].includes(cmd)) {
+                    await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                    await botInstance.sock.sendMessage(remoteJid, { text: '👋 Entendido, cancelamos el proceso. ¡Hasta pronto!' });
+                    continue;
+                }
+
+                let respuesta = '';
+
+                switch (contexto.estado) {
+                    case 'INICIO': {
+                        const cfg = await getConfigNegocio(negocioId);
+                        respuesta = cfg.mensajeBienvenida;
+                        await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_NOMBRE' } });
+                        break;
+                    }
+
+                    case 'ESPERANDO_NOMBRE': {
+                        if (textMessage.trim().length < 3) {
+                            respuesta = 'Por favor, ingresa tu nombre completo (minimo 3 caracteres).';
+                        } else {
+                            const nuevoNombre = textMessage.trim();
+                            const cfg = await getConfigNegocio(negocioId);
+                            const listaSvc = cfg.servicios.map(s => `- ${s.nombre}${s.precio > 0 ? ` ($${s.precio})` : ''}`).join('\n');
+                            respuesta = `Perfecto, ${nuevoNombre}!\n\n*Que servicio te gustaria?*\n\n${listaSvc}`;
+                            await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_SERVICIO', datos: { ...contexto.datos, nombre: nuevoNombre } } });
+                        }
+                        break;
+                    }
+
+                    case 'ESPERANDO_SERVICIO': {
+                        const cfg = await getConfigNegocio(negocioId);
+                        const servicioElegido = cfg.servicios.find(s => s.nombre.toLowerCase() === textMessage.trim().toLowerCase());
+                        if (servicioElegido) {
+                            respuesta = `Excelente: *${servicioElegido.nombre}*\n\n*Para que dia te gustaria agendar?*\n\nEj: "manana", "viernes", "15 de marzo"`;
+                            await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FECHA', datos: { ...contexto.datos, servicio: servicioElegido.nombre } } });
+                        } else {
+                            const listaSvc = cfg.servicios.map(s => `- ${s.nombre}`).join('\n');
+                            respuesta = `No reconozco ese servicio.\n\n*Elige uno:*\n${listaSvc}`;
+                        }
+                        break;
+                    }
+
+                    case 'ESPERANDO_FECHA': {
+                        const parsedDates = chrono.es.parse(textMessage, new Date(), { forwardDate: true });
+                        if (parsedDates.length > 0) {
+                            const fechaParsed = parsedDates[0].start.date();
+                            const fechaStr = fechaParsed.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+                            const disponibles = await getHorariosDisponibles(negocioId, fechaParsed);
+
+                            if (disponibles.length === 0) {
+                                respuesta = `😔 No hay horarios para *${fechaStr}*.\n\n¿Elegimos otra fecha?`;
+                            } else {
+                                respuesta = `Fecha: *${fechaStr}*\n\n*¿A qué hora prefieres?*\n${disponibles.map(h => `• ${h}`).join('\n')}`;
+                                await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_HORA', datos: { ...contexto.datos, fecha: fechaParsed } } });
+                            }
+                        } else {
+                            const intencion = await evaluarIntencion(textMessage);
+                            respuesta = intencion === 'PREGUNTA'
+                                ? 'Soy un bot de agendamiento. *¿Podrías decirme la fecha?*'
+                                : 'No pude entender la fecha.\n\nEj: "mañana", "viernes 14", "15 de marzo"';
+                        }
+                        break;
+                    }
+
+                    case 'ESPERANDO_HORA': {
+                        const horaNormalizada = textMessage.trim()
+                            .replace(/\s+/g, '').replace(/am|pm/gi, '')
+                            .replace(/(\d{1,2}):(\d{2})/, '$1:$2')
+                            .replace(/^(\d{1,2})$/, '$1:00');
+
+                        const fechaParaValidar = new Date(contexto.datos.fecha as unknown as string);
+                        const disponiblesAhora = await getHorariosDisponibles(negocioId, fechaParaValidar);
+                        const todosHorarios = (await getConfigNegocio(negocioId)).horarios[DIA_SEMANA[fechaParaValidar.getDay()]] ?? [];
+
+                        if (todosHorarios.includes(horaNormalizada)) {
+                            if (!disponiblesAhora.includes(horaNormalizada)) {
+                                respuesta = disponiblesAhora.length === 0
+                                    ? `Ese horario ya fue reservado y no quedan mas. Otra fecha?`
+                                    : `Las *${horaNormalizada}* ya fue reservado.\n\n*Disponibles:*\n${disponiblesAhora.map(h => `- ${h}`).join('\n')}`;
+                            } else {
+                                const cfg = await getConfigNegocio(negocioId);
+                                if (cfg.cobrarAdelanto) {
+                                    // Flujo con pago: pedir comprobante
+                                    respuesta = `*Resumen:*\n- ${contexto.datos.nombre}\n- ${fechaParaValidar.toLocaleDateString('es-ES')}\n- ${horaNormalizada}\n- ${contexto.datos.servicio}\n\n*Envia una foto del comprobante de pago (${cfg.porcentajeAdelanto}% de adelanto).*`;
+                                    await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_PAGO', datos: { ...contexto.datos, horario: horaNormalizada } } });
+                                } else {
+                                    // Flujo sin pago: crear cita directamente como CONFIRMADA
+                                    const telefonoCliente = remoteJid.split('@')[0];
+                                    const servicioElegido = cfg.servicios.find(s => s.nombre === contexto.datos.servicio);
+                                    const nuevaCita = await prisma.cita.create({
+                                        data: {
+                                            negocioId,
+                                            clienteNombre: contexto.datos.nombre!,
+                                            clienteTelefono: telefonoCliente,
+                                            fecha: fechaParaValidar,
+                                            horario: horaNormalizada,
+                                            servicio: contexto.datos.servicio || 'Servicio',
+                                            monto: 0,
+                                            estado: 'CONFIRMADA',
+                                        }
+                                    });
+                                    io.emit('cambio-citas');
+                                    io.emit('nueva-cita', { id: nuevaCita.id, clienteNombre: nuevaCita.clienteNombre, clienteTelefono: nuevaCita.clienteTelefono, fecha: nuevaCita.fecha, horario: nuevaCita.horario });
+                                    respuesta = `*Cita confirmada!*\n\n- ${contexto.datos.nombre}\n- ${fechaParaValidar.toLocaleDateString('es-ES')}\n- ${horaNormalizada}\n- ${contexto.datos.servicio || 'Servicio'}\n\n${cfg.mensajeConfirmacion}`;
+                                    await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                                }
+                            }
+                        } else {
+                            const intencion = await evaluarIntencion(textMessage);
+                            if (intencion === 'CAMBIAR_FECHA') {
+                                respuesta = 'Para que fecha?';
+                                await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FECHA' } });
+                            } else if (intencion === 'CANCELAR') {
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                                respuesta = 'Cancelamos. Avisame cuando quieras!';
+                                break;
+                            } else {
+                                respuesta = `No entendi ese horario.\n*Disponibles:*\n${disponiblesAhora.map(h => `- ${h}`).join('\n')}`;
+                            }
+                        }
+                        break;
+                    }
+
+                    case 'ESPERANDO_PAGO':
+                        if (!hasImage) {
+                            respuesta = '📸 Por favor envía una *imagen* del comprobante.';
+                            break;
+                        }
+                        try {
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                            const uploadResult = await new Promise<import('cloudinary').UploadApiResponse>((resolve, reject) => {
+                                cloudinary.uploader.upload_stream({ folder: 'comprobantes' }, (error, result) => {
+                                    if (error) reject(error); else resolve(result!);
+                                }).end(buffer);
+                            });
+
+                            const telefonoCliente = remoteJid.split('@')[0];
+                            const fechaCita = new Date(contexto.datos.fecha as unknown as string);
+
+                            await prisma.cita.deleteMany({
+                                where: { negocioId, clienteTelefono: telefonoCliente, estado: 'VALIDACION_PENDIENTE', horario: contexto.datos.horario!, fecha: fechaCita }
+                            });
+
+                            const ocupadosFinal = await getHorariosOcupados(negocioId, fechaCita);
+                            const disponiblesFinal = await getHorariosDisponibles(negocioId, fechaCita);
+
+                            if (ocupadosFinal.includes(contexto.datos.horario!)) {
+                                respuesta = `Mientras procesabamos tu pago, alguien reservo las *${contexto.datos.horario}*.\n\n`;
+                                if (disponiblesFinal.length > 0) {
+                                    respuesta += `*Disponibles:*\n${disponiblesFinal.map(h => `- ${h}`).join('\n')}`;
+                                    await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_HORA', datos: { ...contexto.datos, horario: undefined } } });
+                                } else {
+                                    respuesta += `No quedan horarios para ese dia. Otra fecha?`;
+                                    await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FECHA', datos: { ...contexto.datos, horario: undefined, fecha: undefined } } });
+                                }
+                                break;
+                            }
+
+                            const cfg = await getConfigNegocio(negocioId);
+                            const servicioElegido = cfg.servicios.find(s => s.nombre === contexto.datos.servicio);
+                            const monto = servicioElegido && servicioElegido.precio > 0
+                                ? Math.round(servicioElegido.precio * cfg.porcentajeAdelanto / 100)
+                                : 0;
+
+                            const nuevaCita = await prisma.cita.create({
+                                data: {
+                                    negocioId,
+                                    clienteNombre: contexto.datos.nombre!,
+                                    clienteTelefono: telefonoCliente,
+                                    fecha: fechaCita,
+                                    horario: contexto.datos.horario!,
+                                    servicio: contexto.datos.servicio || 'Servicio',
+                                    monto,
+                                    estado: 'VALIDACION_PENDIENTE',
+                                    comprobanteUrl: uploadResult.secure_url
+                                }
+                            });
+
+                            io.emit('cambio-citas');
+                            io.emit('nueva-cita', { id: nuevaCita.id, clienteNombre: nuevaCita.clienteNombre, clienteTelefono: nuevaCita.clienteTelefono, fecha: nuevaCita.fecha, horario: nuevaCita.horario });
+
+                            respuesta = cfg.mensajeConfirmacion;
+                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                        } catch (uploadError) {
+                            console.error(`[Bot:${negocioId}] Error procesando comprobante:`, uploadError);
+                            respuesta = '❌ Error al subir el comprobante. Intenta de nuevo.';
+                        }
+                        break;
+
+                    case 'ESPERANDO_FEEDBACK': {
+                        const rating = parseInt(textMessage);
+                        const citaId = contexto.datos.citaId;
+                        if (citaId) {
+                            if (!isNaN(rating) && rating >= 1 && rating <= 5) {
+                                await prisma.cita.update({ where: { id: citaId }, data: { rating, encuestaEnviada: true } });
+                                respuesta = '¡Gracias por tu calificación! ⭐';
+                            } else {
+                                await prisma.cita.update({ where: { id: citaId }, data: { comentario: textMessage, encuestaEnviada: true } });
+                                respuesta = '¡Gracias por tus comentarios! 🙏';
+                            }
+                        } else {
+                            respuesta = '¡Gracias!';
+                        }
+                        await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                        break;
+                    }
+
+                    default:
+                        respuesta = 'Algo salió mal. Escribe *!cita* para comenzar.';
+                }
+
+                await botInstance.sock.sendMessage(remoteJid, { text: respuesta });
+                await botInstance.sock.sendPresenceUpdate('paused', remoteJid);
+
+                try {
+                    const msgGuardado = await prisma.mensajeChat.create({
+                        data: { negocioId, remoteJid, contenido: respuesta, direccion: 'SALIENTE' }
+                    });
+                    io.emit('nuevo-mensaje', msgGuardado);
+                } catch (dbErr) {
+                    console.error(`[Bot:${negocioId}] Error guardando msg saliente:`, dbErr);
+                }
+
+            } catch (error) {
+                console.error(`[Bot:${negocioId}] Error:`, error);
+                try {
+                    await botInstance.sock.sendMessage(remoteJid, { text: '❌ Error interno. Escribe *!cita* para reiniciar.' });
+                } catch { /* ignore */ }
+            }
+        }
+    });
+
+    return {};
+};
+
+// ─── Estado del bot de un negocio ─────────────────────────────────────────────
+export const getEstadoWhatsApp = (negocioId: number) => {
+    const bot = bots.get(negocioId);
+    return { conectado: bot?.conectado ?? false, qr: bot?.qr ?? null, activo: bots.has(negocioId) };
+};
+
+// ─── Cuántos bots están activos (para info en el panel) ─────────────────────
+export const getBotsActivos = () => bots.size;
+
+// ─── Desvincular WhatsApp de un negocio ──────────────────────────────────────
+export const desvincularWhatsApp = async (negocioId: number) => {
+    const bot = bots.get(negocioId);
+    try {
+        if (bot) {
+            console.log(`[Bot:${negocioId}] Desconectando...`);
+            await bot.sock.logout();
+            bots.delete(negocioId);
+            return { message: 'Sesión cerrada correctamente' };
+        }
+        return { message: 'No hay sesión activa' };
+    } catch (error) {
+        console.error(`[Bot:${negocioId}] Error al desvincular:`, error);
+        bots.delete(negocioId);
+        return { error: 'Error al cerrar sesión' };
+    }
+};
+
+// ─── Reiniciar bot para nuevo QR ─────────────────────────────────────────────
+export const reiniciarWhatsApp = async (negocioId: number, io: Server) => {
+    try {
+        const bot = bots.get(negocioId);
+        if (bot) {
+            try { bot.sock.end(undefined); } catch { /* ignore */ }
+            bots.delete(negocioId);
+        }
+
+        await clearAuthState(`negocio-${negocioId}`);
+        io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, reiniciando: true });
+
+        setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 1000);
+        return { message: 'Bot reiniciado. Espera el nuevo QR.' };
+    } catch (error) {
+        console.error(`[Bot:${negocioId}] Error reiniciando:`, error);
+        return { error: 'Error al reiniciar el bot' };
+    }
+};
+
+// ─── Enviar mensaje desde otros servicios (Cron Jobs, etc.) ─────────────────
+export const enviarMensaje = async (negocioId: number, remoteJid: string, text: string): Promise<boolean> => {
+    const bot = bots.get(negocioId);
+    if (!bot || !bot.conectado) {
+        console.warn(`[Bot:${negocioId}] Sin conexión activa.`);
+        return false;
+    }
+
+    try {
+        await bot.sock.sendMessage(remoteJid, { text });
+
+        try {
+            const msgGuardado = await prisma.mensajeChat.create({
+                data: { negocioId, remoteJid, contenido: text, direccion: 'SALIENTE' }
+            });
+            bot.io.emit('nuevo-mensaje', msgGuardado);
+        } catch (dbErr) {
+            console.error(`[Bot:${negocioId}] Error guardando msg saliente:`, dbErr);
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`[Bot:${negocioId}] Error enviando a ${remoteJid}:`, error);
+        return false;
+    }
+};
+
+// ─── Legacy export (para compatibilidad con el negocio original id=1) ────────
+/** @deprecated Usa iniciarWhatsAppNegocio(negocioId, io) */
+export const iniciarWhatsApp = (io: Server) => iniciarWhatsAppNegocio(1, io);
+
+// ─── Pairing Code: vincular sin QR ────────────────────────────────────────────
+/**
+ * Crea un socket dedicado y solicita el codigo de emparejamiento ANTES de que
+ * Baileys genere el QR. Una vez emparejado, el socket toma el lugar del bot normal.
+ *
+ * El usuario ingresa el codigo en:
+ * WhatsApp movil > Dispositivos vinculados > Vincular dispositivo > usar numero en vez de QR
+ */
+export const solicitarCodigoPairing = async (
+    negocioId: number,
+    telefono: string,
+    io: Server
+): Promise<{ codigo?: string; error?: string }> => {
+    const telefonoLimpio = telefono.replace(/\D/g, '');
+
+    if (telefonoLimpio.length < 7) {
+        return { error: 'Numero invalido. Incluye el codigo de pais sin + (ej: 5491155443322).' };
+    }
+
+    if (bots.size >= MAX_BOTS_ACTIVOS && !bots.has(negocioId)) {
+        return { error: `Limite de bots activos alcanzado (maximo ${MAX_BOTS_ACTIVOS}).` };
+    }
+
+    // Detener instancia existente para arrancar fresca
+    const botExistente = bots.get(negocioId);
+    if (botExistente) {
+        if (botExistente.conectado) {
+            return { error: 'El bot ya esta conectado. Desvinculalo primero.' };
+        }
+        try { botExistente.sock.end(undefined); } catch { /* ignorar */ }
+        bots.delete(negocioId);
+    }
+
+    const sessionId = `negocio-${negocioId}`;
+
+    // CRITICO: limpiar credenciales previas del sessionId
+    // WhatsApp rechaza el pairing code si hay creds parciales de intentos anteriores
+    await clearAuthState(sessionId);
+
+    const { state, saveCreds } = await usePrismaAuthState(sessionId);
+    const { version } = await fetchLatestBaileysVersion();
+
+    console.log(`[Bot:${negocioId}] Iniciando socket limpio para pairing code...`);
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'silent' }),
+        auth: state,
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000,
+        emitOwnEvents: false,
+    });
+
+
+    // Registrar la instancia desde el principio para manejar reconexion
+    const instance: BotInstance = {
+        sock,
+        conectado: false,
+        qr: null,
+        intentos: 0,
+        io,
+        lidToPhone: new Map()
+    };
+    bots.set(negocioId, instance);
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // Manejar conexion y reconexion (igual que el flujo normal)
+    sock.ev.on('connection.update', async (update) => {
+        const bot = bots.get(negocioId);
+        if (!bot) return;
+        const { connection, lastDisconnect } = update;
+
+        if (connection === 'open') {
+            console.log(`[Bot:${negocioId}] Conectado via pairing code.`);
+            bot.conectado = true;
+            bot.qr = null;
+            bot.intentos = 0;
+            io.emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null, activo: true });
+        }
+
+        if (connection === 'close') {
+            const reason = (lastDisconnect?.error as Boom)?.output?.statusCode;
+            const shouldReconnect = reason !== DisconnectReason.loggedOut;
+            bot.conectado = false;
+            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, activo: false });
+
+            if (shouldReconnect && bot.intentos < 5) {
+                bot.intentos++;
+                bots.delete(negocioId);
+                setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 3000);
+            } else {
+                bots.delete(negocioId);
+                if (!shouldReconnect) await clearAuthState(sessionId);
+            }
+        }
+    });
+
+    // Solicitar el codigo inmediatamente, antes de que el socket genere QR
+    try {
+        // Pequeña espera para que el handshake TCP initial termine
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        console.log(`[Bot:${negocioId}] Solicitando pairing code para ${telefonoLimpio}...`);
+        const codigo = await sock.requestPairingCode(telefonoLimpio);
+        console.log(`[Bot:${negocioId}] Codigo: ${codigo}`);
+        return { codigo };
+    } catch (error: unknown) {
+        const err = error as { message?: string };
+        console.error(`[Bot:${negocioId}] Error en pairing code:`, error);
+        // Limpiar el socket fallido
+        try { sock.end(undefined); } catch { /* ignorar */ }
+        bots.delete(negocioId);
+        return { error: err?.message || 'Error al generar el codigo. Intenta con QR.' };
+    }
+};
