@@ -1,0 +1,15 @@
+import { Router } from 'express';
+import { requireAdmin } from '../middleware/permissions.middleware';
+import { getOverview, getRevenue } from '../controllers/statistics.controller';
+import { verificarToken } from '../middleware/auth.middleware';
+import { tenantMiddleware } from '../middleware/tenant.middleware';
+
+const router = Router();
+
+// Estadísticas solo para ADMIN del negocio
+router.use(verificarToken, tenantMiddleware, requireAdmin);
+
+router.get('/overview', getOverview);
+router.get('/revenue', getRevenue);
+
+export default router;

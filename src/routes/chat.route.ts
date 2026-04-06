@@ -1,0 +1,15 @@
+import { Router } from 'express';
+import { getConversaciones, getMensajes, sendMensaje, deleteConversacion } from '../controllers/chat.controller';
+import { verificarToken } from '../middleware/auth.middleware';
+import { tenantMiddleware } from '../middleware/tenant.middleware';
+
+const router = Router();
+
+router.use(verificarToken, tenantMiddleware);
+
+router.get('/conversaciones', getConversaciones);
+router.get('/mensajes/:jid', getMensajes);
+router.post('/enviar/:jid', sendMensaje);
+router.delete('/conversacion/:jid', deleteConversacion);
+
+export default router;
