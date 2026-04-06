@@ -1,0 +1,22 @@
+// seed.ts
+// Este archivo ya no crea usuarios manualmente.
+// Los negocios y sus usuarios se crean automáticamente al registrarse con Google OAuth.
+// Solo úsalo si necesitas insertar datos de prueba en desarrollo.
+
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+async function main() {
+    console.log('ℹ️  El seed ya no crea credenciales de admin manualmente.');
+    console.log('   Los negocios se registran solos con Google OAuth.');
+    console.log('   El negocio legacy (id=1) fue creado por la migración saas_multitenancy.');
+}
+
+main()
+    .then(async () => { await prisma.$disconnect(); })
+    .catch(async (e) => {
+        console.error(e);
+        await prisma.$disconnect();
+        process.exit(1);
+    });
