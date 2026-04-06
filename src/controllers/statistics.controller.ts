@@ -1,0 +1,113 @@
+import { Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+/**
+ * GET /api/statistics/overview
+ * Resumen general de estadísticas del negocio autenticado (solo ADMIN)
+ */
+export const getOverview = async (req: Request, res: Response) => {
+    const negocioId = req.negocioId!;
+    try {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        const citasMes = await prisma.cita.count({
+            where: { negocioId, fecha: { gte: startOfMonth, lte: endOfMonth }, estado: { not: 'CANCELADA' } }
+        });
+
+        const citasConfirmadas = await prisma.cita.findMany({
+            where: { negocioId, fecha: { gte: startOfMonth, lte: endOfMonth }, estado: 'CONFIRMADA' },
+            select: { monto: true }
+        });
+
+        const ingresosMes = citasConfirmadas.reduce((sum, cita) => sum + cita.monto, 0);
+
+        const clientesAgrupados = await prisma.cita.groupBy({
+            by: ['clienteTelefono', 'clienteNombre'],
+            _count: { id: true },
+            where: { negocioId, estado: { not: 'CANCELADA' } },
+            orderBy: { _count: { id: 'desc' } },
+            take: 5
+        });
+
+        const topClientes = clientesAgrupados.map(c => ({
+            nombre: c.clienteNombre || 'Sin nombre',
+            telefono: c.clienteTelefono,
+            totalCitas: c._count.id
+        }));
+
+        const horariosAgrupados = await prisma.cita.groupBy({
+            by: ['horario'],
+            _count: { id: true },
+            where: { negocioId, estado: { not: 'CANCELADA' } },
+            orderBy: { _count: { id: 'desc' } },
+            take: 5
+        });
+
+        const horariosPopulares = horariosAgrupados.map(h => ({
+            horario: h.horario,
+            totalReservas: h._count.id
+        }));
+
+        const ratingAgregado = await prisma.cita.aggregate({
+            _avg: { rating: true },
+            where: { negocioId, rating: { not: null } }
+        });
+
+        const ultimosComentarios = await prisma.cita.findMany({
+            where: { negocioId, comentario: { not: null }, estado: { not: 'CANCELADA' } },
+            orderBy: { fecha: 'desc' },
+            take: 5,
+            select: { clienteNombre: true, rating: true, comentario: true, fecha: true }
+        });
+
+        const citasVirtuales = await prisma.cita.count({
+            where: { negocioId, fecha: { gte: startOfMonth, lte: endOfMonth }, estado: { not: 'CANCELADA' }, origen: 'virtual' }
+        });
+
+        const citasPresenciales = await prisma.cita.count({
+            where: { negocioId, fecha: { gte: startOfMonth, lte: endOfMonth }, estado: { not: 'CANCELADA' }, origen: 'presencial' }
+        });
+
+        res.json({ citasMes, ingresosMes, topClientes, horariosPopulares, citasVirtuales, citasPresenciales, ratingPromedio: ratingAgregado._avg.rating || 0, ultimosComentarios });
+    } catch (error) {
+        console.error('Error en overview:', error);
+        res.status(500).json({ error: 'Error al obtener estadísticas' });
+    }
+};
+
+/**
+ * GET /api/statistics/revenue?months=6
+ * Ingresos por mes del negocio autenticado
+ */
+export const getRevenue = async (req: Request, res: Response) => {
+    const negocioId = req.negocioId!;
+    try {
+        const months = parseInt(req.query.months as string) || 6;
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+
+        const citas = await prisma.cita.findMany({
+            where: { negocioId, fecha: { gte: startDate }, estado: 'CONFIRMADA' },
+            select: { fecha: true, monto: true }
+        });
+
+        const revenueByMonth: Record<string, number> = {};
+        citas.forEach(cita => {
+            const monthKey = `${cita.fecha.getFullYear()}-${String(cita.fecha.getMonth() + 1).padStart(2, '0')}`;
+            revenueByMonth[monthKey] = (revenueByMonth[monthKey] || 0) + cita.monto;
+        });
+
+        const revenue = Object.entries(revenueByMonth)
+            .map(([mes, total]) => ({ mes, total }))
+            .sort((a, b) => a.mes.localeCompare(b.mes));
+
+        res.json({ revenue });
+    } catch (error) {
+        console.error('Error en revenue:', error);
+        res.status(500).json({ error: 'Error al obtener ingresos' });
+    }
+};
