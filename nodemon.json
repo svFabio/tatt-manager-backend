@@ -1,0 +1,11 @@
+{
+    "watch": [
+        "src"
+    ],
+    "ext": "ts,json",
+    "exec": "ts-node src/server.ts",
+    "ignore": [
+        "baileys_auth_info/*",
+        "node_modules"
+    ]
+}
