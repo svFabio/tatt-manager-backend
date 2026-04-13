@@ -110,7 +110,6 @@ model Cita {
   solicitud   Solicitud? @relation(fields: [solicitudId], references: [id])
   registroSesion RegistroSesion?
   pagos          Pago[]
-  @@index([negocioId, fecha])
   @@index([negocioId, fechaHoraInicio])
 }
 model MensajeChat {
