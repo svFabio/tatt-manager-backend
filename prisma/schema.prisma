@@ -1,115 +1,132 @@
-// backend/prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
 enum Rol {
   ADMIN
-  STAFF
+  ARTISTA
 }
-
 enum Plan {
   FREE
   PRO
 }
-
-// ─── TENANT (el negocio que se registra) ─────────────────────────────────────
+enum EstadoSolicitud {
+  PENDIENTE
+  COTIZADA
+  RECHAZADA
+}
+enum EstadoCita {
+  PENDIENTE
+  CONFIRMADA
+  FINALIZADA
+  CANCELADA
+}
+enum TipoMovimiento {
+  ENTRADA
+  DESCUENTO_SESION
+  AJUSTE_MANUAL
+}
+enum TamanioCap {
+  CHICA
+  MEDIANA
+  GRANDE
+}
 model Negocio {
   id        Int      @id @default(autoincrement())
-  googleId  String   @unique // ID de Google del dueño que se registró
+  googleId  String   @unique 
   email     String   @unique
   nombre    String   @default("Mi Negocio")
   plan      Plan     @default(FREE)
   creadoEn  DateTime @default(now())
-
   usuarios      Usuario[]
   citas         Cita[]
   sesionesChat  SesionChat[]
   mensajesChat  MensajeChat[]
   configuracion Configuracion?
+  clientes           Cliente[]
+  solicitudes        Solicitud[]
+  registrosSesion    RegistroSesion[]
+  tintas             Tinta[]
+  pagos              Pago[]
 }
-
-// ─── USUARIO (staff/admin del negocio) ───────────────────────────────────────
 model Usuario {
   id        Int      @id @default(autoincrement())
   nombre    String
   email     String   @unique
-  password  String   @default("") // vacío para usuarios de Google; usado solo en dev seed
-  googleId  String?  // ID de Google del usuario (opcional)
-  rol       Rol      @default(STAFF)
+  password  String   @default("") 
+  googleId  String?  
+  rol       Rol      @default(ARTISTA)
   creadoEn  DateTime @default(now())
-
   negocioId Int
   negocio   Negocio @relation(fields: [negocioId], references: [id])
+  citasComoArtista        Cita[]               @relation("CitaArtista")
+  solicitudesComoArtista  Solicitud[]          @relation("SolicitudArtista")
+  registrosSesion         RegistroSesion[]     @relation("RegistroArtista")
+  historialInventario     HistorialInventario[] @relation("RegistradoPor")
+  pagosRegistrados        Pago[]               @relation("PagoRegistradoPor")
 }
-
-// ─── SESIÓN BAILEYS (por negocio) ────────────────────────────────────────────
 model BaileysSession {
   id    String @id
   creds String @db.Text
   keys  String @db.Text
 }
-
-// ─── SESIÓN DE CHAT (por negocio) ────────────────────────────────────────────
 model SesionChat {
-  id            String   @id // remoteJid
+  id            String   @id 
   estado        String
   datos         Json
   ultimoMensaje DateTime @default(now())
-
   negocioId Int
   negocio   Negocio @relation(fields: [negocioId], references: [id])
-
   @@index([negocioId, ultimoMensaje])
 }
-
-// ─── CITA ─────────────────────────────────────────────────────────────────────
 model Cita {
   id              Int      @id @default(autoincrement())
-  fecha           DateTime
-  horario         String
-  clienteNombre   String?
-  clienteTelefono String
-  servicio        String   @default("Spa")
-  monto           Float
-  estado          String   @default("PENDIENTE")
-  comprobanteUrl  String?
-  descripcion     String?
-  origen          String   @default("virtual")
-  recordatorio24h Boolean  @default(false)
-  recordatorio1h  Boolean  @default(false)
-  encuestaEnviada Boolean  @default(false)
-  rating          Int?
-  comentario      String?
+  comprobanteUrl   String?    
+  descripcion      String?    
+  recordatorio24h  Boolean    @default(false)
+  recordatorio1h   Boolean    @default(false)
+  encuestaEnviada  Boolean    @default(false)
+  rating           Int?
+  comentario       String?
+  fechaHoraInicio  DateTime?
+  fechaHoraFin     DateTime?
+  duracionEnHoras  Decimal?   @db.Decimal(4, 1)
+  tipoCita         String     @default("tatuaje") 
+  estadoCita       EstadoCita @default(PENDIENTE)
+  estiloDeTatuaje  String?
+  zonaDelCuerpo    String?
+  seniaPagada      Decimal    @default(0) @db.Decimal(10, 2)
   creadoEn        DateTime @default(now())
-
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
-
+  negocioId   Int
+  negocio     Negocio    @relation(fields: [negocioId], references: [id])
+  clienteId   Int?
+  cliente     Cliente?   @relation(fields: [clienteId], references: [id])
+  artistaId   Int?
+  artista     Usuario?   @relation("CitaArtista", fields: [artistaId], references: [id])
+  solicitudId Int?       @unique
+  solicitud   Solicitud? @relation(fields: [solicitudId], references: [id])
+  registroSesion RegistroSesion?
+  pagos          Pago[]
   @@index([negocioId, fecha])
+  @@index([negocioId, fechaHoraInicio])
 }
-
-// ─── HISTORIAL DE MENSAJES ───────────────────────────────────────────────────
 model MensajeChat {
   id        Int      @id @default(autoincrement())
   remoteJid String
   contenido String
-  direccion String   // ENTRANTE | SALIENTE
+  direccion String   
   timestamp DateTime @default(now())
-
   negocioId Int
   negocio   Negocio @relation(fields: [negocioId], references: [id])
-
+  clienteId   Int?
+  cliente     Cliente?   @relation(fields: [clienteId], references: [id])
+  solicitudId Int?
+  solicitud   Solicitud? @relation(fields: [solicitudId], references: [id])
   @@index([negocioId, remoteJid, timestamp])
 }
-
-// ─── CONFIGURACIÓN DEL BOT ────────────────────────────────────────────────────
 model Configuracion {
   id                  Int    @id @default(autoincrement())
   trigger             String @default("!cita")
@@ -120,7 +137,126 @@ model Configuracion {
   qrContenido         String  @default("TU_CODIGO_QR_AQUI")
   cobrarAdelanto      Boolean @default(true)
   porcentajeAdelanto  Int     @default(50)
-
   negocioId Int     @unique
   negocio   Negocio @relation(fields: [negocioId], references: [id])
+}
+model Cliente {
+  id             Int      @id @default(autoincrement())
+  nombre         String
+  numeroWhatsapp String   @unique
+  creadoEn       DateTime @default(now())
+  negocioId Int
+  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  solicitudes Solicitud[]
+  citas       Cita[]
+  registros   RegistroSesion[]
+  pagos       Pago[]
+  mensajes    MensajeChat[]
+}
+model Solicitud {
+  id                Int             @id @default(autoincrement())
+  tipo              String          
+  estado            EstadoSolicitud @default(PENDIENTE)
+  zonaDelCuerpo     String?
+  tamanoEnCm        String?
+  descripcion       String
+  fotoReferenciaUrl String?
+  precioCotizado    Decimal?        @db.Decimal(10, 2)
+  horasEstimadas    Decimal?        @db.Decimal(4, 1)
+  seniaRequerida    Decimal?        @db.Decimal(10, 2)
+  recibidaEn        DateTime        @default(now())
+  cotizadaEn        DateTime?
+  negocioId Int
+  negocio   Negocio  @relation(fields: [negocioId], references: [id])
+  clienteId Int
+  cliente   Cliente  @relation(fields: [clienteId], references: [id])
+  artistaId Int?
+  artista   Usuario? @relation("SolicitudArtista", fields: [artistaId], references: [id])
+  cita     Cita?
+  mensajes MensajeChat[]
+  @@index([negocioId, estado, recibidaEn])
+}
+model RegistroSesion {
+  id               Int      @id @default(autoincrement())
+  duracionEnHoras  Decimal  @db.Decimal(4, 1)
+  seniaRecibida    Decimal  @default(0) @db.Decimal(10, 2)
+  cobroDelTrabajo  Decimal  @db.Decimal(10, 2)
+  totalDeLaSesion  Decimal  @db.Decimal(10, 2)
+  fotoResultadoUrl String?
+  observaciones    String?
+  reportada        Boolean  @default(false)
+  motivoReporte    String?
+  cerradaEn        DateTime @default(now())
+  negocioId Int
+  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  citaId    Int     @unique
+  cita      Cita    @relation(fields: [citaId], references: [id])
+  artistaId Int
+  artista   Usuario @relation("RegistroArtista", fields: [artistaId], references: [id])
+  clienteId Int
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+  capsUsadas            CapsUsadas[]
+  movimientosInventario HistorialInventario[]
+  @@index([negocioId, cerradaEn])
+}
+model CapsUsadas {
+  id            Int        @id @default(autoincrement())
+  tamanioCap    TamanioCap
+  cantidadUsada Int
+  registroSesionId Int
+  registroSesion   RegistroSesion @relation(fields: [registroSesionId], references: [id])
+  tintaId          Int
+  tinta            Tinta          @relation(fields: [tintaId], references: [id])
+  @@unique([registroSesionId, tintaId, tamanioCap])
+}
+model Tinta {
+  id       Int      @id @default(autoincrement())
+  nombre   String
+  marca    String
+  color    String
+  colorHex String   @db.Char(7)
+  activa   Boolean  @default(true)
+  creadaEn DateTime @default(now())
+  negocioId Int
+  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  stock      StockTinta[]
+  capsUsadas CapsUsadas[]
+}
+model StockTinta {
+  id             Int        @id @default(autoincrement())
+  tamanioCap     TamanioCap
+  cantidadActual Int        @default(0)
+  cantidadMinima Int        @default(3)
+  actualizadoEn  DateTime   @default(now())
+  tintaId Int
+  tinta   Tinta @relation(fields: [tintaId], references: [id])
+  historial HistorialInventario[]
+  @@unique([tintaId, tamanioCap])
+}
+model HistorialInventario {
+  id             Int            @id @default(autoincrement())
+  tipoMovimiento TipoMovimiento
+  cantidad       Int
+  motivo         String?
+  registradoEn   DateTime       @default(now())
+  stockTintaId      Int
+  stockTinta        StockTinta      @relation(fields: [stockTintaId], references: [id])
+  registradoPorId   Int
+  registradoPor     Usuario         @relation("RegistradoPor", fields: [registradoPorId], references: [id])
+  registroSesionId  Int?
+  registroSesion    RegistroSesion? @relation(fields: [registroSesionId], references: [id])
+}
+model Pago {
+  id                 Int      @id @default(autoincrement())
+  monto              Decimal  @db.Decimal(10, 2)
+  fotoComprobanteUrl String?
+  registradoEn       DateTime @default(now())
+  negocioId       Int
+  negocio         Negocio @relation(fields: [negocioId], references: [id])
+  clienteId       Int
+  cliente         Cliente @relation(fields: [clienteId], references: [id])
+  citaId          Int?
+  cita            Cita?   @relation(fields: [citaId], references: [id])
+  registradoPorId Int
+  registradoPor   Usuario @relation("PagoRegistradoPor", fields: [registradoPorId], references: [id])
 }
