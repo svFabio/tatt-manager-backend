@@ -1,134 +1,1 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import helmet from 'helmet';
-import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import citasRoutes from './routes/citas.route';
-import authRoutes from './routes/auth.route';
-import statisticsRoutes from './routes/statistics.route';
-import usersRoutes from './routes/users.route';
-import chatRoutes from './routes/chat.route';
-import configuracionRoutes from './routes/configuracion.route';
-import {
-    iniciarWhatsAppNegocio,
-    getEstadoWhatsApp,
-    desvincularWhatsApp,
-    reiniciarWhatsApp,
-    getBotsActivos,
-    solicitarCodigoPairing
-} from './services/whatsappClient';
-import { iniciarCronJobs } from './services/cleanupService';
-import { iniciarRecordatorios } from './services/reminderService';
-import { iniciarSurvey } from './services/surveyService';
-import { verificarToken } from './middleware/auth.middleware';
-import { tenantMiddleware } from './middleware/tenant.middleware';
-
-dotenv.config();
-
-const app = express();
-app.set('trust proxy', 1);
-
-const PORT = process.env.PORT || 3000;
-
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
-
-app.use(helmet());
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.json());
-
-// CORS — en produccion leer origenes desde CORS_ORIGINS (coma-separados)
-const allowedOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
-    : [];
-
-app.use(cors({
-    origin: (origin, callback) => {
-        // Permitir requests sin origin (Postman, mobile, server-to-server)
-        if (!origin) return callback(null, true);
-        // En desarrollo sin CORS_ORIGINS seteado, permitir todo
-        if (allowedOrigins.length === 0) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
-    },
-    credentials: true,
-}));
-
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 500,
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-});
-app.use(limiter);
-
-app.use((req, res, next) => {
-    req.app.set('io', io);
-    next();
-});
-
-// Rutas de salud
-app.get('/', (_req, res) => res.send('Backend funcionando 🚀'));
-app.get('/ping', (_req, res) => res.send('pong'));
-
-// ─── Rutas WhatsApp (requieren auth + tenant scope) ─────────────────────────
-// Devuelve el estado del bot del negocio autenticado
-app.get('/api/status-whatsapp', verificarToken, tenantMiddleware, (req, res) => {
-    const estado = getEstadoWhatsApp(req.negocioId!);
-    res.json({ ...estado, botsActivos: getBotsActivos() });
-});
-
-// Inicia el bot del negocio autenticado
-app.post('/api/start-whatsapp', verificarToken, tenantMiddleware, async (req, res) => {
-    const resultado = await iniciarWhatsAppNegocio(req.negocioId!, io);
-    if (resultado.error) return res.status(429).json({ error: resultado.error });
-    res.json({ message: 'Bot iniciando. Espera el QR.' });
-});
-
-// Desvincula el bot del negocio autenticado
-app.post('/api/logout', verificarToken, tenantMiddleware, async (req, res) => {
-    const resultado = await desvincularWhatsApp(req.negocioId!);
-    res.json(resultado);
-});
-
-// Reinicia el bot del negocio autenticado
-app.post('/api/restart-whatsapp', verificarToken, tenantMiddleware, async (req, res) => {
-    const resultado = await reiniciarWhatsApp(req.negocioId!, io);
-    res.json(resultado);
-});
-
-// Solicitar codigo de emparejamiento (alternativa al QR)
-app.post('/api/pairing-code', verificarToken, tenantMiddleware, async (req, res) => {
-    const { telefono } = req.body;
-    if (!telefono) return res.status(400).json({ error: 'El numero de telefono es requerido' });
-    const resultado = await solicitarCodigoPairing(req.negocioId!, telefono, io);
-    if (resultado.error) return res.status(400).json({ error: resultado.error });
-    res.json({ codigo: resultado.codigo });
-});
-
-// Rutas de negocio
-app.use('/api/citas', citasRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/configuracion', configuracionRoutes);
-app.use('/api/statistics', statisticsRoutes);
-app.use('/api/users', usersRoutes);
-app.use('/api/chat', chatRoutes);
-
-io.on('connection', (socket) => {
-    console.log('⚡ Cliente conectado al Socket:', socket.id);
-});
-
-httpServer.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`🚀 Servidor listo en puerto ${PORT}`);
-    // NO iniciamos WhatsApp global — cada negocio lo inicia desde su panel
-    iniciarCronJobs();
-    iniciarRecordatorios();
-    iniciarSurvey();
-});
-
-export default app;
+import express from 'express';import cors from 'cors';import dotenv from 'dotenv';import helmet from 'helmet';import morgan from 'morgan';import rateLimit from 'express-rate-limit';import { createServer } from 'http';import { Server } from 'socket.io';import citasRoutes from './routes/citas.route';import authRoutes from './routes/auth.route';import statisticsRoutes from './routes/statistics.route';import usersRoutes from './routes/users.route';import chatRoutes from './routes/chat.route';import configuracionRoutes from './routes/configuracion.route';import clientesRoutes from './routes/clientes.route';import solicitudesRoutes from './routes/solicitudes.route';import registroSesionRoutes from './routes/registroSesion.route';import tintasRoutes from './routes/tintas.route';import pagosRoutes from './routes/pagos.route';import {    iniciarWhatsAppNegocio,    getEstadoWhatsApp,    desvincularWhatsApp,    reiniciarWhatsApp,    getBotsActivos,    solicitarCodigoPairing} from './services/whatsappClient';import { iniciarCronJobs } from './services/cleanupService';import { iniciarRecordatorios } from './services/reminderService';import { iniciarSurvey } from './services/surveyService';import { verificarToken } from './middleware/auth.middleware';import { tenantMiddleware } from './middleware/tenant.middleware';dotenv.config();const app = express();app.set('trust proxy', 1);const PORT = process.env.PORT || 3000;const httpServer = createServer(app);const io = new Server(httpServer, {    cors: { origin: "*", methods: ["GET", "POST"] }});app.use(helmet());app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));app.use(express.json());const allowedOrigins = process.env.CORS_ORIGINS    ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())    : [];app.use(cors({    origin: (origin, callback) => {        if (!origin) return callback(null, true);        if (allowedOrigins.length === 0) return callback(null, true);        if (allowedOrigins.includes(origin)) return callback(null, true);        callback(new Error(`Origin ${origin} not allowed by CORS`));    },    credentials: true,}));const limiter = rateLimit({    windowMs: 15 * 60 * 1000,    limit: 500,    standardHeaders: 'draft-7',    legacyHeaders: false,});app.use(limiter);app.use((req, res, next) => {    req.app.set('io', io);    next();});app.get('/', (_req, res) => res.send('Backend funcionando 🚀'));app.get('/ping', (_req, res) => res.send('pong'));app.get('/api/status-whatsapp', (req: any, res: any, next: any) => { req.negocioId = 1; next(); }, (req, res) => {    const estado = getEstadoWhatsApp(req.negocioId!);    res.json({ ...estado, botsActivos: getBotsActivos() });});app.post('/api/start-whatsapp', (req: any, res: any, next: any) => { req.negocioId = 1; next(); }, async (req, res) => {    const resultado = await iniciarWhatsAppNegocio(req.negocioId!, io);    if (resultado.error) return res.status(429).json({ error: resultado.error });    res.json({ message: 'Bot iniciando. Espera el QR.' });});app.post('/api/logout', (req: any, res: any, next: any) => { req.negocioId = 1; next(); }, async (req, res) => {    const resultado = await desvincularWhatsApp(req.negocioId!);    res.json(resultado);});app.post('/api/restart-whatsapp', (req: any, res: any, next: any) => { req.negocioId = 1; next(); }, async (req, res) => {    const resultado = await reiniciarWhatsApp(req.negocioId!, io);    res.json(resultado);});app.post('/api/pairing-code', (req: any, res: any, next: any) => { req.negocioId = 1; next(); }, async (req, res) => {    const { telefono } = req.body;    if (!telefono) return res.status(400).json({ error: 'El numero de telefono es requerido' });    const resultado = await solicitarCodigoPairing(req.negocioId!, telefono, io);    if (resultado.error) return res.status(400).json({ error: resultado.error });    res.json({ codigo: resultado.codigo });});app.use('/api/citas', citasRoutes);app.use('/api/auth', authRoutes);app.use('/api/configuracion', configuracionRoutes);app.use('/api/statistics', statisticsRoutes);app.use('/api/users', usersRoutes);app.use('/api/chat', chatRoutes);app.use('/api/clientes', clientesRoutes);app.use('/api/solicitudes', solicitudesRoutes);app.use('/api/registro-sesion', registroSesionRoutes);app.use('/api/tintas', tintasRoutes);app.use('/api/pagos', pagosRoutes);io.on('connection', (socket) => {    console.log('⚡ Cliente conectado al Socket:', socket.id);});httpServer.listen(Number(PORT), '0.0.0.0', () => {    console.log(`🚀 Servidor listo en puerto ${PORT}`);    iniciarCronJobs();    iniciarRecordatorios();    iniciarSurvey();});export default app;
