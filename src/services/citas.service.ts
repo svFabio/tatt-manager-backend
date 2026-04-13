@@ -7,42 +7,48 @@ const HORARIOS_DEFINIDOS = ["13:00", "14:00", "15:00", "16:00", "17:00"];
 export class CitasService {
   static async getPendientes(negocioId: number) {
     return await prisma.cita.findMany({
-      where: { negocioId, estadoLegacy: 'VALIDACION_PENDIENTE' },
-      orderBy: { creadoEn: 'desc' }
+      where: { negocioId, estadoCita: 'PENDIENTE' },
+      orderBy: { creadoEn: 'desc' },
+      include: { cliente: true, solicitud: true }
     });
   }
 
   static async validarCita(id: number, accion: string, negocioId: number) {
     const nuevoEstado = (accion === 'CONFIRMAR' || accion === 'APROBAR') ? 'CONFIRMADA' : 'CANCELADA';
-    const dataUpdate = nuevoEstado === 'CONFIRMADA'
-      ? { estadoLegacy: nuevoEstado }
-      : { estadoLegacy: nuevoEstado, comprobanteUrl: null };
-
+    const citaActual = await prisma.cita.findUnique({ where: { id, negocioId }, include: { cliente: true } });
+    if (!citaActual) throw new Error('Cita no encontrada');
+    
     const citaActualizada = await prisma.cita.update({
       where: { id, negocioId },
-      data: dataUpdate
+      data: { estadoCita: nuevoEstado },
+      include: { cliente: true }
     });
 
     try {
       let mensaje = '';
-      if (nuevoEstado === 'CONFIRMADA') {
-        const fechaFormateada = new Date(citaActualizada.fecha).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
-        mensaje = `¡Hola ${citaActualizada.clienteNombre || 'Cliente'}! 👋\n\n✅ *Tu pago ha sido verificado y tu cita está CONFIRMADA.* 🎉\n\n📋 *Detalles de tu cita:*\n📅 Fecha: ${fechaFormateada}\n⏰ Hora: ${citaActualizada.horario}\n💆‍♀️ Servicio: ${citaActualizada.servicio || 'Spa'}\n\n✨ ¡Te esperamos! Cualquier consulta, escríbenos.`;
+      if (nuevoEstado === 'CONFIRMADA' && citaActualizada.fechaHoraInicio) {
+        const fechaFormateada = citaActualizada.fechaHoraInicio.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+        const horas = citaActualizada.fechaHoraInicio.getHours().toString().padStart(2, '0');
+        const mins = citaActualizada.fechaHoraInicio.getMinutes().toString().padStart(2, '0');
+        const horario = `${horas}:${mins}`;
+
+        mensaje = `¡Hola ${citaActualizada.cliente?.nombre || 'Cliente'}! 👋\n\n✅ *Tu pago ha sido verificado y tu cita está CONFIRMADA.* 🎉\n\n📋 *Detalles de tu cita:*\n📅 Fecha: ${fechaFormateada}\n⏰ Hora: ${horario}\n💆‍♀️ Servicio: ${citaActualizada.tipoCita || 'Tatuaje'}\n\n✨ ¡Te esperamos! Cualquier consulta, escríbenos.`;
       } else if (nuevoEstado === 'CANCELADA') {
-        mensaje = `Hola ${citaActualizada.clienteNombre || 'Cliente'}. 😔\n\n❌ Tu cita ha sido cancelada.\n\nSi crees que es un error o deseas reagendar, por favor contáctanos.`;
+        mensaje = `Hola ${citaActualizada.cliente?.nombre || 'Cliente'}. 😔\n\n❌ Tu cita ha sido cancelada.\n\nSi crees que es un error o deseas reagendar, por favor contáctanos.`;
       }
 
-      if (mensaje && citaActualizada.clienteTelefono) {
+      const clienteTelefono = citaActualizada.cliente?.numeroWhatsapp;
+      if (mensaje && clienteTelefono) {
         const ultimoMsgEntrante = await prisma.mensajeChat.findFirst({
           where: {
             negocioId,
-            remoteJid: { contains: citaActualizada.clienteTelefono },
+            remoteJid: { contains: clienteTelefono },
             direccion: 'ENTRANTE'
           },
           orderBy: { timestamp: 'desc' },
           select: { remoteJid: true }
         });
-        const jid = ultimoMsgEntrante?.remoteJid || `${citaActualizada.clienteTelefono}@s.whatsapp.net`;
+        const jid = ultimoMsgEntrante?.remoteJid || `${clienteTelefono}@s.whatsapp.net`;
         await enviarMensaje(negocioId, jid, mensaje);
       }
     } catch (msgError) {
@@ -57,10 +63,11 @@ export class CitasService {
     return await prisma.cita.findMany({
       where: {
         negocioId,
-        fecha: { gte: fechaDesde, lte: fechaHasta },
-        estadoLegacy: { not: 'CANCELADA' }
+        fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
+        estadoCita: { not: 'CANCELADA' }
       },
-      orderBy: { fecha: 'asc' }
+      orderBy: { fechaHoraInicio: 'asc' },
+      include: { cliente: true, artista: true }
     });
   }
 
@@ -69,18 +76,19 @@ export class CitasService {
     const finHoy = new Date(); finHoy.setHours(23, 59, 59, 999);
     
     const citasHoy = await prisma.cita.count({
-      where: { negocioId, fecha: { gte: inicioHoy, lte: finHoy }, estadoLegacy: 'CONFIRMADA' }
+      where: { negocioId, fechaHoraInicio: { gte: inicioHoy, lte: finHoy }, estadoCita: 'CONFIRMADA' }
     });
     const pendientes = await prisma.cita.count({
-      where: { negocioId, estadoLegacy: 'VALIDACION_PENDIENTE' }
+      where: { negocioId, estadoCita: 'PENDIENTE' }
     });
     const proximasCitas = await prisma.cita.findMany({
-      where: { negocioId, fecha: { gte: inicioHoy, lte: finHoy }, estadoLegacy: { not: 'CANCELADA' } },
-      orderBy: { horario: 'asc' },
-      take: 5
+      where: { negocioId, fechaHoraInicio: { gte: inicioHoy, lte: finHoy }, estadoCita: { not: 'CANCELADA' } },
+      orderBy: { fechaHoraInicio: 'asc' },
+      take: 5,
+      include: { cliente: true }
     });
     const totalFuturas = await prisma.cita.count({
-      where: { negocioId, fecha: { gte: new Date() }, estadoLegacy: { not: 'CANCELADA' } }
+      where: { negocioId, fechaHoraInicio: { gte: new Date() }, estadoCita: { not: 'CANCELADA' } }
     });
     return { citasHoy, pendientes, proximasCitas, totalFuturas };
   }
@@ -93,11 +101,15 @@ export class CitasService {
     fin.setHours(23, 59, 59, 999);
     
     const ocupadas = await prisma.cita.findMany({
-      where: { negocioId, fecha: { gte: inicio, lte: fin }, estadoLegacy: { notIn: ['CANCELADA'] } },
-      select: { horario: true }
+      where: { negocioId, fechaHoraInicio: { gte: inicio, lte: fin }, estadoCita: { notIn: ['CANCELADA'] } },
+      select: { fechaHoraInicio: true }
     });
     
-    const horasOcupadas = ocupadas.map(c => c.horario);
+    const horasOcupadas = ocupadas.filter(c => c.fechaHoraInicio).map(c => {
+       const h = c.fechaHoraInicio!.getHours().toString().padStart(2, '0');
+       const m = c.fechaHoraInicio!.getMinutes().toString().padStart(2, '0');
+       return `${h}:${m}`;
+    });
     let disponibles = HORARIOS_DEFINIDOS.filter(h => !horasOcupadas.includes(h));
     
     const ahora = new Date(new Date().toLocaleString("en-US", { timeZone: "America/La_Paz" }));
@@ -125,14 +137,23 @@ export class CitasService {
     const fechaCita = new Date(year, month - 1, day);
     const [horas, minutos] = horario.split(':').map(Number);
     fechaCita.setHours(horas, minutos, 0, 0);
+    const fechaFin = new Date(fechaCita.getTime() + 60 * 60 * 1000); 
+
+    let cliente = await prisma.cliente.findUnique({ where: { numeroWhatsapp: telefonoLimpio } });
+    if (!cliente) {
+        cliente = await prisma.cliente.create({
+            data: { nombre: clienteNombre, numeroWhatsapp: telefonoLimpio, negocioId }
+        });
+    }
     
     const citaExistente = await prisma.cita.findFirst({
-      where: { negocioId, fecha: fechaCita, horario, estadoLegacy: { not: 'CANCELADA' } }
+      where: { negocioId, fechaHoraInicio: fechaCita, estadoCita: { not: 'CANCELADA' } }
     });
     if (citaExistente) throw { status: 409, message: 'Este horario ya está ocupado.' };
     
     return await prisma.cita.create({
-      data: { negocioId, clienteNombre, clienteTelefono, fecha: fechaCita, horario, monto: 50, estadoLegacy: 'CONFIRMADA', origen: 'presencial' }
+      data: { negocioId, clienteId: cliente.id, fechaHoraInicio: fechaCita, fechaHoraFin: fechaFin, duracionEnHoras: 1, estadoCita: 'CONFIRMADA', seniaPagada: 50 },
+      include: { cliente: true }
     });
   }
 
@@ -142,18 +163,20 @@ export class CitasService {
     const nuevaFecha = new Date(year, month - 1, day);
     const [horas, minutos] = horario.split(':').map(Number);
     nuevaFecha.setHours(horas, minutos, 0, 0);
+    const nuevaFechaFin = new Date(nuevaFecha.getTime() + 60 * 60 * 1000);
 
-    const citaActual = await prisma.cita.findUnique({ where: { id, negocioId } });
+    const citaActual = await prisma.cita.findUnique({ where: { id, negocioId }, include: { cliente: true } });
     if (!citaActual) throw { status: 404, message: 'Cita no encontrada' };
 
     const ocupado = await prisma.cita.findFirst({
-      where: { negocioId, fecha: nuevaFecha, horario, estadoLegacy: { not: 'CANCELADA' }, NOT: { id } }
+      where: { negocioId, fechaHoraInicio: nuevaFecha, estadoCita: { not: 'CANCELADA' }, NOT: { id } }
     });
     if (ocupado) throw { status: 409, message: 'Ese horario ya está ocupado.' };
 
     return await prisma.cita.update({
       where: { id },
-      data: { fecha: nuevaFecha, horario }
+      data: { fechaHoraInicio: nuevaFecha, fechaHoraFin: nuevaFechaFin },
+      include: { cliente: true }
     });
   }
 
@@ -163,16 +186,12 @@ export class CitasService {
 
     if (verificarPasado) {
       const ahora = new Date();
-      const [year, month, day] = new Date(cita.fecha).toISOString().split('T')[0].split('-').map(Number);
-      const fechaExacta = new Date(year, month - 1, day);
-      const [horas, minutos] = cita.horario.split(':').map(Number);
-      fechaExacta.setHours(horas, minutos, 0, 0);
-      if (fechaExacta > ahora) throw { status: 400, message: `Solo se pueden marcar citas pasadas.` };
+      if (cita.fechaHoraInicio && cita.fechaHoraInicio > ahora) throw { status: 400, message: `Solo se pueden marcar citas pasadas.` };
     }
 
     return await prisma.cita.update({
       where: { id },
-      data: { estadoLegacy: nuevoEstado }
+      data: { estadoCita: nuevoEstado as any }
     });
   }
 
@@ -183,7 +202,6 @@ export class CitasService {
     });
   }
 
-  // Lógica de tatuaje nueva
   static async crearCitaTatuaje(negocioId: number, input: any) {
     const { fechaHoraInicio, duracionEnHoras: duracionInput, tipoCita = 'tatuaje', artistaId, clienteId, solicitudId, estiloDeTatuaje, zonaDelCuerpo, seniaPagada = 0 } = input;
     
@@ -211,7 +229,7 @@ export class CitasService {
       data: {
         negocioId, fechaHoraInicio: inicio, fechaHoraFin: fin, duracionEnHoras, tipoCita, estadoCita: 'PENDIENTE',
         estiloDeTatuaje: estiloDeTatuaje || null, zonaDelCuerpo: zonaDelCuerpo || null, seniaPagada: seniaPagada || 0,
-        clienteId, artistaId, solicitudId: solicitudId || null,
+        clienteId, artistaId, solicitudId: solicitudId || null
       },
       include: {
         cliente: { select: { id: true, nombre: true, numeroWhatsapp: true } },

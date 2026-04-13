@@ -66,7 +66,16 @@ export const crearCitaAdmin = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('cambio-citas');
-      io.emit('nueva-cita', { id: nuevaCita.id, clienteNombre: nuevaCita.clienteNombre, clienteTelefono: nuevaCita.clienteTelefono, fecha: nuevaCita.fecha, horario: nuevaCita.horario });
+      const horarioStr = nuevaCita.fechaHoraInicio ? `${String(nuevaCita.fechaHoraInicio.getHours()).padStart(2, '0')}:${String(nuevaCita.fechaHoraInicio.getMinutes()).padStart(2, '0')}` : '00:00';
+      const fechaStr = nuevaCita.fechaHoraInicio ? nuevaCita.fechaHoraInicio.toISOString().split('T')[0] : '';
+      
+      io.emit('nueva-cita', { 
+         id: nuevaCita.id, 
+         clienteNombre: nuevaCita.cliente?.nombre || 'Sin Nombre', 
+         clienteTelefono: nuevaCita.cliente?.numeroWhatsapp || '', 
+         fecha: fechaStr, 
+         horario: horarioStr 
+      });
     }
     res.status(201).json(nuevaCita);
   } catch (error: any) {
@@ -92,7 +101,8 @@ export const reprogramarCita = async (req: Request, res: Response) => {
 
 export const marcarNoAsistio = async (req: Request, res: Response) => {
   try {
-    const citaActualizada = await CitasService.cambiarEstadoLegacy(parseInt(req.params.id), req.negocioId!, 'NO_ASISTIO', true);
+    // NO_ASISTIO ya no es válido en el modelo, lo mapeamos a CANCELADA en el nuevo modelo
+    const citaActualizada = await CitasService.cambiarEstadoNuevo(parseInt(req.params.id), req.negocioId!, 'CANCELADA');
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
@@ -103,7 +113,8 @@ export const marcarNoAsistio = async (req: Request, res: Response) => {
 
 export const marcarAsistio = async (req: Request, res: Response) => {
   try {
-    const citaActualizada = await CitasService.cambiarEstadoLegacy(parseInt(req.params.id), req.negocioId!, 'CONFIRMADA');
+    // CONFIRMADA o FINALIZADA según la semántica
+    const citaActualizada = await CitasService.cambiarEstadoNuevo(parseInt(req.params.id), req.negocioId!, 'FINALIZADA');
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
