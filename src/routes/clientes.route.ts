@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { getClientes, getClienteById, crearCliente } from '../controllers/clientes.controller';
+import { verificarToken } from '../middleware/auth.middleware';
+import { tenantMiddleware } from '../middleware/tenant.middleware';
+const router = Router();
+router.use(verificarToken, tenantMiddleware);
+router.get('/', getClientes);
+router.get('/:id', getClienteById);
+router.post('/', crearCliente);
+export default router;
