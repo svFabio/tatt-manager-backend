@@ -17,6 +17,12 @@ import {
 } from '../controllers/citas.controller';
 import { verificarToken } from '../middleware/auth.middleware';
 import { tenantMiddleware } from '../middleware/tenant.middleware';
+import {
+    listarSolicitudes,
+    listarCitasPorEstado,
+    obtenerDetalleCita
+} from '../controllers/listarCitas.controller';
+
 const router = Router();
 router.use(verificarToken, tenantMiddleware);
 router.get('/', getAgenda);
@@ -33,4 +39,9 @@ router.get('/disponibilidad', getDisponibilidad);
 router.post('/nueva', crearCitaTatuaje);
 router.patch('/:id/confirmar', confirmarCita);
 router.patch('/:id/cancelar', cancelarCita);
+
+router.get('/solicitudes', listarSolicitudes);
+router.get('/por-estado', listarCitasPorEstado);
+router.get('/:id/detalle', obtenerDetalleCita);
+
 export default router;

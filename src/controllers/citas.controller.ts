@@ -68,13 +68,13 @@ export const crearCitaAdmin = async (req: Request, res: Response) => {
       io.emit('cambio-citas');
       const horarioStr = nuevaCita.fechaHoraInicio ? `${String(nuevaCita.fechaHoraInicio.getHours()).padStart(2, '0')}:${String(nuevaCita.fechaHoraInicio.getMinutes()).padStart(2, '0')}` : '00:00';
       const fechaStr = nuevaCita.fechaHoraInicio ? nuevaCita.fechaHoraInicio.toISOString().split('T')[0] : '';
-      
-      io.emit('nueva-cita', { 
-         id: nuevaCita.id, 
-         clienteNombre: nuevaCita.cliente?.nombre || 'Sin Nombre', 
-         clienteTelefono: nuevaCita.cliente?.numeroWhatsapp || '', 
-         fecha: fechaStr, 
-         horario: horarioStr 
+
+      io.emit('nueva-cita', {
+        id: nuevaCita.id,
+        clienteNombre: nuevaCita.cliente?.nombre || 'Sin Nombre',
+        clienteTelefono: nuevaCita.cliente?.numeroWhatsapp || '',
+        fecha: fechaStr,
+        horario: horarioStr
       });
     }
     res.status(201).json(nuevaCita);
@@ -89,7 +89,7 @@ export const reprogramarCita = async (req: Request, res: Response) => {
     const { id } = req.params;
     const { fecha, horario } = req.body;
     if (!fecha || !horario) return res.status(400).json({ error: 'Fecha y horario son requeridos' });
-    
+
     const citaActualizada = await CitasService.reprogramarCita(parseInt(id), req.negocioId!, fecha, horario);
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
@@ -138,11 +138,11 @@ export const crearCitaTatuaje = async (req: Request, res: Response) => {
     if (!fechaHoraInicio || !artistaId || !clienteId) {
       return res.status(400).json({ data: null, error: 'fechaHoraInicio, artistaId y clienteId requeridos' });
     }
-    
+
     const nuevaCita = await CitasService.crearCitaTatuaje(req.negocioId!, req.body);
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
-    
+
     res.status(201).json({ data: nuevaCita, error: null });
   } catch (error: any) {
     console.error('Error creando cita de tatuaje:', error);

@@ -42,21 +42,21 @@ export const getOverview = async (req: Request, res: Response) => {
 
         // Horarios populares (Extrayendo la hora de fechaHoraInicio)
         const todasCitasMes = await prisma.cita.findMany({
-             where: { negocioId, fechaHoraInicio: { gte: startOfMonth, lte: endOfMonth }, estadoCita: { not: 'CANCELADA' } },
-             select: { fechaHoraInicio: true }
+            where: { negocioId, fechaHoraInicio: { gte: startOfMonth, lte: endOfMonth }, estadoCita: { not: 'CANCELADA' } },
+            select: { fechaHoraInicio: true }
         });
-        
+
         const horaryCount: Record<string, number> = {};
         todasCitasMes.forEach(c => {
-             if (c.fechaHoraInicio) {
-                 const h = `${c.fechaHoraInicio.getHours().toString().padStart(2, '0')}:00`;
-                 horaryCount[h] = (horaryCount[h] || 0) + 1;
-             }
+            if (c.fechaHoraInicio) {
+                const h = `${c.fechaHoraInicio.getHours().toString().padStart(2, '0')}:00`;
+                horaryCount[h] = (horaryCount[h] || 0) + 1;
+            }
         });
         const horariosPopulares = Object.entries(horaryCount)
-             .map(([horario, totalReservas]) => ({ horario, totalReservas }))
-             .sort((a, b) => b.totalReservas - a.totalReservas)
-             .slice(0, 5);
+            .map(([horario, totalReservas]) => ({ horario, totalReservas }))
+            .sort((a, b) => b.totalReservas - a.totalReservas)
+            .slice(0, 5);
 
         const ratingAgregado = await prisma.cita.aggregate({
             _avg: { rating: true },
@@ -78,18 +78,18 @@ export const getOverview = async (req: Request, res: Response) => {
         }));
 
         // origen no existe en el schema Prisma de Cita que validamos, si falla tu tabla lo ajustaremos.
-        const citasVirtuales = 0; 
-        const citasPresenciales = citasMes; 
+        const citasVirtuales = 0;
+        const citasPresenciales = citasMes;
 
-        res.json({ 
-            citasMes, 
-            ingresosMes, 
-            topClientes, 
-            horariosPopulares, 
-            citasVirtuales, 
-            citasPresenciales, 
-            ratingPromedio: ratingAgregado._avg.rating || 0, 
-            ultimosComentarios: ultimosComentariosFormato 
+        res.json({
+            citasMes,
+            ingresosMes,
+            topClientes,
+            horariosPopulares,
+            citasVirtuales,
+            citasPresenciales,
+            ratingPromedio: ratingAgregado._avg.rating || 0,
+            ultimosComentarios: ultimosComentariosFormato
         });
     } catch (error) {
         console.error('Error en overview:', error);
