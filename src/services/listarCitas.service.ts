@@ -104,9 +104,9 @@ export const getCitaDetails = async (citaId: number) => {
         const citaFormateada = {
             id: cita.id,
             negocioId: cita.negocioId,
-            fechaHoraInicio: cita.fechaHoraInicio,
-            recibido: cita.creadoEn,
-            referencia: cita.solicitud?.fotoReferenciaUrl,
+            fechaHoraInicio: cita.fechaHoraInicio || 'No especificada',
+            recibido: cita.creadoEn || 'No especificada',
+            referencia: cita.solicitud?.fotoReferenciaUrl || 'No especificada',
             zona: cita.solicitud?.zonaDelCuerpo || 'No especificada',
             tamano: cita.solicitud?.tamanoEnCm || 'No especificado',
             clienteNombre: cita.cliente?.nombre || 'Desconocido',

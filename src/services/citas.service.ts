@@ -293,6 +293,7 @@ export class CitasService {
             data: { estadoCita: estadoFaltante as any },
         });
     }
+
 }
 
 
