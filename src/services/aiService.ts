@@ -1,266 +1,1 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-// Usamos 'gemini-flash-latest' (alias estable de tu lista)
-const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
-// Estados de la conversación
-export type EstadoConversacion =
-    | 'INICIO'
-    | 'ESPERANDO_FECHA'
-    | 'CONFIRMANDO_FECHA'
-    | 'ESPERANDO_HORA'
-    | 'ESPERANDO_NOMBRE'
-    | 'ESPERANDO_PAGO'
-    | 'ESPERANDO_SERVICIO'
-    | 'ESPERANDO_FEEDBACK';
-
-export interface ContextoConversacion {
-    estado: EstadoConversacion;
-    datos: {
-        fecha?: Date;
-        horario?: string;
-        nombre?: string;
-        servicio?: string; // Tipo de servicio (por ahora siempre "Spa")
-        citaId?: number;
-        posiblesFechas?: Date[]; // Para resolver ambigüedad
-    };
-    intentosAclaracion: number;
-    ultimoMensaje?: string;
-}
-
-// Prompt para evaluar intención cuando el flujo estricto falla
-const PROMPT_EVALUACION = `
-Eres un clasificador de intenciones para un bot de citas de Spa.
-El usuario está en un flujo de agendamiento pero ha dicho algo que no esperábamos.
-Tu trabajo es clasificar su intención en una de estas categorías:
-
-1. CAMBIAR_FECHA: El usuario quiere cambiar la fecha de la cita (ej: "mejor el sábado", "no puedo el viernes").
-2. CAMBIAR_HORA: El usuario quiere otra hora no listada o cambiarla.
-3. PREGUNTA: El usuario tiene una duda sobre el servicio, ubicación, precios, etc.
-4. CANCELAR: El usuario quiere salir, cancelar o reiniciar.
-5. CONTINUAR: El usuario está tratando de seguir el flujo pero de forma ambigua.
-6. OTRO: No se entiende o es irrelevante.
-
-Responde SOLO con el nombre de la categoría.
-
-Contexto actual: Agendando cita.
-Mensaje del usuario: 
-`;
-
-export const evaluarIntencion = async (mensaje: string): Promise<string> => {
-    try {
-        const result = await model.generateContent(`${PROMPT_EVALUACION}"${mensaje}"`);
-        const response = result.response.text().trim().toUpperCase();
-        return response;
-    } catch (error) {
-        console.error('Error evaluando intención:', error);
-        return 'OTRO';
-    }
-};
-
-export interface ResultadoIA {
-    intencion: 'AGENDAR' | 'CONSULTAR' | 'CANCELAR' | 'OTRO' | 'ACLARAR';
-    entidades: {
-        fecha?: string;
-        hora?: string;
-        nombre?: string;
-    };
-    sentimiento: 'positivo' | 'neutral' | 'negativo';
-    confianza: number;
-    respuestaSugerida?: string;
-}
-
-/**
- * Procesa un mensaje del usuario usando Gemini AI
- */
-export const procesarMensajeConIA = async (
-    mensaje: string,
-    contexto: ContextoConversacion
-): Promise<ResultadoIA> => {
-    try {
-        const prompt = construirPrompt(mensaje, contexto);
-
-        const result = await model.generateContent(prompt);
-        const response = result.response;
-        const texto = response.text();
-
-        // Parsear la respuesta JSON de Gemini
-        // Usamos un método robusto de extracción (buscar primer { y último })
-        // para ignorar bloques de código markdown o texto extra.
-        const inicio = texto.indexOf('{');
-        const fin = texto.lastIndexOf('}');
-
-        if (inicio === -1 || fin === -1) {
-            throw new Error('Respuesta IA no contiene JSON válido');
-        }
-
-        const textoLimpio = texto.substring(inicio, fin + 1);
-        const resultado = JSON.parse(textoLimpio);
-
-        console.log('✨ Gemini respondió con éxito:', resultado.intencion); // PRUEBA DE VIDA 🧠
-
-        return resultado as ResultadoIA;
-    } catch (error) {
-        // LOG COMPLETO: Para saber exactamente por qué falla (404, 429, etc)
-        console.error('❌ ERROR IA:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-
-        // FALLBACK MANUAL: Si la IA falla, usamos simple lógica de palabras clave
-        const intencion = detectarIntencionSimple(mensaje);
-        const tieneFecha = contieneInformacionFecha(mensaje);
-        const tieneHora = contieneInformacionHora(mensaje);
-
-        // GENERAR RESPUESTA DE RESPALDO (Crucial para que el bot no se calle)
-        let respuestaRespaldo = '';
-        if (intencion === 'AGENDAR') respuestaRespaldo = 'Entendido, quieres agendar. ¿Para qué fecha?';
-        else if (intencion === 'CONSULTAR') respuestaRespaldo = 'Revisando tu agenda...';
-        else respuestaRespaldo = 'Disculpa, tuve un problema de conexión con mi cerebro 🤖. ¿Podrías decirme para qué día buscas cita?';
-
-        return {
-            intencion: intencion,
-            entidades: {
-                fecha: tieneFecha ? mensaje : undefined,
-                hora: tieneHora ? mensaje : undefined
-            },
-            sentimiento: 'neutral',
-            confianza: 0.5,
-            respuestaSugerida: respuestaRespaldo
-        };
-    }
-};
-
-/**
- * Construye el prompt contextual para Gemini
- */
-const construirPrompt = (mensaje: string, contexto: ContextoConversacion): string => {
-    const ejemplos = `
-Eres un asistente virtual de una clínica/consultorio en Bolivia que ayuda a agendar citas por WhatsApp.
-
-**Contexto actual:**
-- Estado de conversación: ${contexto.estado}
-- Datos recopilados: ${JSON.stringify(contexto.datos)}
-
-**Tu tarea:**
-Analiza el siguiente mensaje del usuario y extrae información estructurada en formato JSON.
-
-**Mensaje del usuario:**
-"${mensaje}"
-
-**Instrucciones:**
-1. Detecta la INTENCIÓN principal: AGENDAR, CONSULTAR, CANCELAR, ACLARAR, OTRO
-2. Extrae ENTIDADES clave:
-   - fecha: cualquier referencia temporal (ej: "mañana", "viernes próximo", "25 de enero", "la próxima semana")
-   - hora: cualquier horario mencionado (ej: "3pm", "14:00", "por la tarde")
-   - nombre: si menciona su nombre
-3. Analiza SENTIMIENTO: positivo, neutral, negativo
-4. Asigna CONFIANZA (0-1): qué tan seguro estás del análisis
-
-**Importante:**
-- Si el mensaje es ambiguo o poco claro, marca confianza < 0.6
-- Si menciona fechas relativas como "viernes" sin especificar cuál, extráelo igual
-- Sé flexible con errores tipográficos (ej: "veirnes" = "viernes")
-
-**Responde ÚNICAMENTE con JSON válido:**
-{
-  "intencion": "AGENDAR" | "CONSULTAR" | "CANCELAR" | "ACLARAR" | "OTRO",
-  "entidades": {
-    "fecha": "texto de fecha si existe",
-    "hora": "texto de hora si existe",
-    "nombre": "nombre si existe"
-  },
-  "sentimiento": "positivo" | "neutral" | "negativo",
-  "confianza": 0.0 a 1.0
-}
-`;
-
-    return ejemplos;
-};
-
-/**
- * Genera una respuesta contextual basada en el estado
- */
-export const generarRespuestaContextual = async (
-    contexto: ContextoConversacion,
-    situacion: string
-): Promise<string> => {
-    try {
-        const prompt = `
-Eres un asistente amigable de una clínica en Bolivia. Genera una respuesta CORTA y NATURAL en español para WhatsApp.
-
-**Situación:** ${situacion}
-**Estado actual:** ${contexto.estado}
-**Datos del usuario:** ${JSON.stringify(contexto.datos)}
-
-**Instrucciones:**
-- Usa emojis apropiados pero sin exagerar (máximo 2 por mensaje)
-- Sé breve y directo
-- Usa un tono amigable pero profesional
-- Si pides información, da ejemplos claros
-
-Responde SOLO con el texto del mensaje, sin comillas ni formato adicional.
-`;
-
-        const result = await model.generateContent(prompt);
-        return result.response.text().trim();
-    } catch (error) {
-        console.error('Error generando respuesta:', error);
-        return 'Disculpa, ¿podrías repetir eso?';
-    }
-};
-
-/**
- * Detecta intención sin usar IA (fallback rápido)
- */
-export const detectarIntencionSimple = (mensaje: string): ResultadoIA['intencion'] => {
-    const textoLower = mensaje.toLowerCase();
-
-    if (/hola|buenos|buenas|quiero|necesito|me gustaría|quisiera|agendar|cita|reserva|turno/.test(textoLower)) {
-        return 'AGENDAR';
-    }
-
-    if (/cancelar|anular|borrar|eliminar/.test(textoLower)) {
-        return 'CANCELAR';
-    }
-
-    if (/cuándo|horario|disponible|libre|consultar/.test(textoLower)) {
-        return 'CONSULTAR';
-    }
-
-    return 'OTRO';
-};
-
-/**
- * Valida si un mensaje contiene información de fecha
- */
-export const contieneInformacionFecha = (mensaje: string): boolean => {
-    const textoLower = mensaje.toLowerCase();
-
-    const patronesFecha = [
-        /\d{1,2}[\/-]\d{1,2}/,  // 25/01, 25-01
-        /mañana|hoy|pasado mañana/,
-        /lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo/,
-        /esta semana|pr[óo]xima semana|siguiente semana/,
-        /enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre/
-    ];
-
-    return patronesFecha.some(patron => patron.test(textoLower));
-};
-
-/**
- * Valida si un mensaje contiene información de hora
- */
-export const contieneInformacionHora = (mensaje: string): boolean => {
-    const textoLower = mensaje.toLowerCase();
-
-    const patronesHora = [
-        /\d{1,2}:\d{2}/,  // 14:00
-        /\d{1,2}\s*(am|pm)/i,  // 3pm, 3 PM
-        /mañana|tarde|noche/,
-        /(a las|tipo)\s*\d/
-    ];
-
-    return patronesHora.some(patron => patron.test(textoLower));
-};
+import { GoogleGenerativeAI } from '@google/generative-ai';import dotenv from 'dotenv';dotenv.config();const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });export type EstadoConversacion =    | 'INICIO'    | 'ESPERANDO_FECHA'    | 'CONFIRMANDO_FECHA'    | 'ESPERANDO_HORA'    | 'ESPERANDO_NOMBRE'    | 'ESPERANDO_PAGO'    | 'ESPERANDO_SERVICIO'    | 'ESPERANDO_FEEDBACK';export interface ContextoConversacion {    estado: EstadoConversacion;    datos: {        fecha?: Date;        horario?: string;        nombre?: string;        servicio?: string;         citaId?: number;        posiblesFechas?: Date[];     };    intentosAclaracion: number;    ultimoMensaje?: string;}const PROMPT_EVALUACION = `Eres un clasificador de intenciones para un bot de citas de Spa.El usuario está en un flujo de agendamiento pero ha dicho algo que no esperábamos.Tu trabajo es clasificar su intención en una de estas categorías:1. CAMBIAR_FECHA: El usuario quiere cambiar la fecha de la cita (ej: "mejor el sábado", "no puedo el viernes").2. CAMBIAR_HORA: El usuario quiere otra hora no listada o cambiarla.3. PREGUNTA: El usuario tiene una duda sobre el servicio, ubicación, precios, etc.4. CANCELAR: El usuario quiere salir, cancelar o reiniciar.5. CONTINUAR: El usuario está tratando de seguir el flujo pero de forma ambigua.6. OTRO: No se entiende o es irrelevante.Responde SOLO con el nombre de la categoría.Contexto actual: Agendando cita.Mensaje del usuario: `;export const evaluarIntencion = async (mensaje: string): Promise<string> => {    try {        const result = await model.generateContent(`${PROMPT_EVALUACION}"${mensaje}"`);        const response = result.response.text().trim().toUpperCase();        return response;    } catch (error) {        console.error('Error evaluando intención:', error);        return 'OTRO';    }};export interface ResultadoIA {    intencion: 'AGENDAR' | 'CONSULTAR' | 'CANCELAR' | 'OTRO' | 'ACLARAR';    entidades: {        fecha?: string;        hora?: string;        nombre?: string;    };    sentimiento: 'positivo' | 'neutral' | 'negativo';    confianza: number;    respuestaSugerida?: string;}export const procesarMensajeConIA = async (    mensaje: string,    contexto: ContextoConversacion): Promise<ResultadoIA> => {    try {        const prompt = construirPrompt(mensaje, contexto);        const result = await model.generateContent(prompt);        const response = result.response;        const texto = response.text();        const inicio = texto.indexOf('{');        const fin = texto.lastIndexOf('}');        if (inicio === -1 || fin === -1) {            throw new Error('Respuesta IA no contiene JSON válido');        }        const textoLimpio = texto.substring(inicio, fin + 1);        const resultado = JSON.parse(textoLimpio);        console.log('✨ Gemini respondió con éxito:', resultado.intencion);         return resultado as ResultadoIA;    } catch (error) {        console.error('❌ ERROR IA:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));        const intencion = detectarIntencionSimple(mensaje);        const tieneFecha = contieneInformacionFecha(mensaje);        const tieneHora = contieneInformacionHora(mensaje);        let respuestaRespaldo = '';        if (intencion === 'AGENDAR') respuestaRespaldo = 'Entendido, quieres agendar. ¿Para qué fecha?';        else if (intencion === 'CONSULTAR') respuestaRespaldo = 'Revisando tu agenda...';        else respuestaRespaldo = 'Disculpa, tuve un problema de conexión con mi cerebro 🤖. ¿Podrías decirme para qué día buscas cita?';        return {            intencion: intencion,            entidades: {                fecha: tieneFecha ? mensaje : undefined,                hora: tieneHora ? mensaje : undefined            },            sentimiento: 'neutral',            confianza: 0.5,            respuestaSugerida: respuestaRespaldo        };    }};const construirPrompt = (mensaje: string, contexto: ContextoConversacion): string => {    const ejemplos = `Eres un asistente virtual de una clínica/consultorio en Bolivia que ayuda a agendar citas por WhatsApp.**Contexto actual:**- Estado de conversación: ${contexto.estado}- Datos recopilados: ${JSON.stringify(contexto.datos)}**Tu tarea:**Analiza el siguiente mensaje del usuario y extrae información estructurada en formato JSON.**Mensaje del usuario:**"${mensaje}"**Instrucciones:**1. Detecta la INTENCIÓN principal: AGENDAR, CONSULTAR, CANCELAR, ACLARAR, OTRO2. Extrae ENTIDADES clave:   - fecha: cualquier referencia temporal (ej: "mañana", "viernes próximo", "25 de enero", "la próxima semana")   - hora: cualquier horario mencionado (ej: "3pm", "14:00", "por la tarde")   - nombre: si menciona su nombre3. Analiza SENTIMIENTO: positivo, neutral, negativo4. Asigna CONFIANZA (0-1): qué tan seguro estás del análisis**Importante:**- Si el mensaje es ambiguo o poco claro, marca confianza < 0.6- Si menciona fechas relativas como "viernes" sin especificar cuál, extráelo igual- Sé flexible con errores tipográficos (ej: "veirnes" = "viernes")**Responde ÚNICAMENTE con JSON válido:**{  "intencion": "AGENDAR" | "CONSULTAR" | "CANCELAR" | "ACLARAR" | "OTRO",  "entidades": {    "fecha": "texto de fecha si existe",    "hora": "texto de hora si existe",    "nombre": "nombre si existe"  },  "sentimiento": "positivo" | "neutral" | "negativo",  "confianza": 0.0 a 1.0}`;    return ejemplos;};export const generarRespuestaContextual = async (    contexto: ContextoConversacion,    situacion: string): Promise<string> => {    try {        const prompt = `Eres un asistente amigable de una clínica en Bolivia. Genera una respuesta CORTA y NATURAL en español para WhatsApp.**Situación:** ${situacion}**Estado actual:** ${contexto.estado}**Datos del usuario:** ${JSON.stringify(contexto.datos)}**Instrucciones:**- Usa emojis apropiados pero sin exagerar (máximo 2 por mensaje)- Sé breve y directo- Usa un tono amigable pero profesional- Si pides información, da ejemplos clarosResponde SOLO con el texto del mensaje, sin comillas ni formato adicional.`;        const result = await model.generateContent(prompt);        return result.response.text().trim();    } catch (error) {        console.error('Error generando respuesta:', error);        return 'Disculpa, ¿podrías repetir eso?';    }};export const detectarIntencionSimple = (mensaje: string): ResultadoIA['intencion'] => {    const textoLower = mensaje.toLowerCase();    if (/hola|buenos|buenas|quiero|necesito|me gustaría|quisiera|agendar|cita|reserva|turno/.test(textoLower)) {        return 'AGENDAR';    }    if (/cancelar|anular|borrar|eliminar/.test(textoLower)) {        return 'CANCELAR';    }    if (/cuándo|horario|disponible|libre|consultar/.test(textoLower)) {        return 'CONSULTAR';    }    return 'OTRO';};export const contieneInformacionFecha = (mensaje: string): boolean => {    const textoLower = mensaje.toLowerCase();    const patronesFecha = [        /\d{1,2}[\/-]\d{1,2}/,          /mañana|hoy|pasado mañana/,        /lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo/,        /esta semana|pr[óo]xima semana|siguiente semana/,        /enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre/    ];    return patronesFecha.some(patron => patron.test(textoLower));};export const contieneInformacionHora = (mensaje: string): boolean => {    const textoLower = mensaje.toLowerCase();    const patronesHora = [        /\d{1,2}:\d{2}/,          /\d{1,2}\s*(am|pm)/i,          /mañana|tarde|noche/,        /(a las|tipo)\s*\d/    ];    return patronesHora.some(patron => patron.test(textoLower));};
