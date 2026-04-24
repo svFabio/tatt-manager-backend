@@ -12,6 +12,8 @@ import statisticsRoutes from './routes/statistics.route';
 import usersRoutes from './routes/users.route';
 import chatRoutes from './routes/chat.route';
 import configuracionRoutes from './routes/configuracion.route';
+// IMPORTANTE: Importar las nuevas rutas de sesiones (HU-06)
+import sessionRoutes from './routes/session.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -111,7 +113,13 @@ app.post('/api/pairing-code', verificarToken, tenantMiddleware, async (req, res)
     res.json({ codigo: resultado.codigo });
 });
 
-// Rutas de negocio
+// ==============================================
+// NUEVA RUTA PARA HU-06: Registrar sesión manual
+// (No requiere autenticación por ahora, pero se puede agregar verificarToken)
+// ==============================================
+app.use('/api/sessions', sessionRoutes);
+
+// Rutas de negocio (estas ya requieren autenticación)
 app.use('/api/citas', citasRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/configuracion', configuracionRoutes);
