@@ -29,7 +29,8 @@ export const getAgenda = async (req: Request, res: Response) => {
     const { desde, hasta } = req.query;
     const citas = await CitasService.getAgenda(req.negocioId!, desde as string, hasta as string);
     res.json(citas);
-  } catch {
+  } catch (error) {
+    console.error('Error en getAgenda:', error);
     res.status(500).json({ error: 'Error al cargar la agenda' });
   }
 };
