@@ -3,17 +3,20 @@ import { usePrismaAuthState, clearAuthState } from './baileysAuth';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { Server } from 'socket.io';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { v2 as cloudinary } from 'cloudinary';
 import { ContextoConversacion, EstadoConversacion } from './aiService';
 import { MAX_BOTS_ACTIVOS } from '../config';
+import { getAvailableSlots } from './calendarService';
+import { parsearFechaNatural, formatearFechaAmigable } from './dateParser';
 
-const prisma = new PrismaClient();
+import dotenv from 'dotenv';
+dotenv.config();
 
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
+    api_secret: process.env.CLOUDINARY_API_SECRET?.trim()
 });
 
 async function getConfigNegocio(negocioId: number) {
@@ -47,7 +50,6 @@ const esMensajeActivador = (mensaje: string, triggerConfig: string): boolean => 
 
     const activadoresPorDefecto = [
         '/start',
-        'start',
         'quiero hacerme un tattoo',
         'quiero hacerme un tatuaje',
         'quiero un tattoo',
@@ -424,6 +426,100 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             respuesta = '❌ Hubo un error al registrar tu solicitud. Intenta nuevamente escribiendo el comando de inicio.';
                             await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
                         }
+                        break;
+                    }
+
+                    case 'ESPERANDO_FECHA': {
+                        const parsedDate = parsearFechaNatural(textMessage);
+                        if (!parsedDate || parsedDate.confianza === 'baja') {
+                            respuesta = '🤔 No logré entender bien la fecha. ¿Podrías ser más específico? (Ej. "mañana", "el 15 de mayo", "este viernes").';
+                        } else {
+                            const fechaConsultada = parsedDate.fecha;
+                            const hoy = new Date();
+                            hoy.setHours(0, 0, 0, 0);
+
+                            if (fechaConsultada < hoy) {
+                                respuesta = 'No podemos viajar en el tiempo 🕰️😅. Por favor elige una fecha que sea a partir de hoy.';
+                            } else {
+                                const horasTatuaje = Number(datos.horasEstimadas) || 1;
+                                const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje);
+                                
+                                if (disponibles.length === 0) {
+                                respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no me quedan horarios que puedan acomodar las ${horasTatuaje} horas que tomará tu tatuaje. 😢\n\n¿Te gustaría intentar con otra fecha?`;
+                            } else {
+                                const listaHorarios = disponibles.map(h => `- *${h}*`).join('\n');
+                                respuesta = `¡Genial! Para el *${formatearFechaAmigable(fechaConsultada)}* tengo los siguientes horarios disponibles:\n\n${listaHorarios}\n\nEscribe la hora que prefieres para confirmar tu cita.`;
+                                
+                                await prisma.sesionChat.updateMany({
+                                    where: { id: remoteJid, negocioId },
+                                    data: { 
+                                        estado: 'ESPERANDO_HORA', 
+                                        datos: { ...datos, fechaSeleccionada: fechaConsultada }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    break;
+                    }
+
+                    case 'ESPERANDO_HORA': {
+                        const horaElegida = textMessage.trim();
+                        // Validar formato de hora usando una regex simple HH:mm
+                        const horaRegex = /^([01]?\d|2[0-3]):?([0-5]\d)$/;
+                        const match = horaElegida.match(horaRegex);
+                        
+                        if (!match) {
+                            respuesta = 'Por favor, escribe la hora en formato válido. Ej: "14:00", "16:30".';
+                            break;
+                        }
+
+                        let horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
+                        
+                        // Doble chequeo de disponibilidad (Race condition prevention)
+                        const fechaSeleccionada = new Date(datos.fechaSeleccionada);
+                        const horasTatuaje = Number(datos.horasEstimadas) || 1;
+                        const disponiblesAhora = await getAvailableSlots(negocioId, fechaSeleccionada, horasTatuaje);
+                        
+                        if (!disponiblesAhora.includes(horaFormateada)) {
+                            respuesta = `Uy! Parece que alguien acaba de tomar ese horario o no está disponible. 😅\n\nEstos son los que quedan:\n${disponiblesAhora.map(h => `- *${h}*`).join('\n')}\n\n¿Cuál prefieres?`;
+                            break;
+                        }
+
+                        // Crear la Cita en base de datos
+                        try {
+                            const inicioCita = new Date(fechaSeleccionada);
+                            const [horasStr, minsStr] = horaFormateada.split(':');
+                            inicioCita.setHours(Number(horasStr), Number(minsStr), 0, 0);
+
+                            const finCita = new Date(inicioCita);
+                            finCita.setHours(inicioCita.getHours() + Math.floor(horasTatuaje));
+                            finCita.setMinutes(inicioCita.getMinutes() + ((horasTatuaje % 1) * 60));
+
+                            const solicitudRelacionada = await prisma.solicitud.findUnique({ where: { id: datos.solicitudId } });
+                            const nuevaCita = await prisma.cita.create({
+                                data: {
+                                    negocioId,
+                                    clienteId: solicitudRelacionada?.clienteId,
+                                    solicitudId: datos.solicitudId,
+                                    fechaHoraInicio: inicioCita,
+                                    fechaHoraFin: finCita,
+                                    duracionEnHoras: horasTatuaje,
+                                    estadoCita: 'CONFIRMADA'
+                                }
+                            });
+
+                            // Actualizar la solicitud a estado AGENDADO o similar si existiese.
+                            
+                            const horaFinStr = `${finCita.getHours().toString().padStart(2, '0')}:${finCita.getMinutes().toString().padStart(2, '0')}`;
+                            respuesta = `¡Perfecto ${datos.nombre}!\n\nTu cita quedó agendada para *${formatearFechaAmigable(fechaSeleccionada)}* a las *${horaFormateada}*.\nLa sesión finalizará aproximadamente a las *${horaFinStr}*.\n\nTe esperamos en el estudio 🔥`;
+
+                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                        } catch (err) {
+                            console.error(`[Bot:${negocioId}] Error creando cita:`, err);
+                            respuesta = 'Hubo un error al guardar tu cita. Por favor intenta de nuevo.';
+                        }
+
                         break;
                     }
 
