@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient, TamanioCap } from '@prisma/client';
+import { TamanioCap } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { entradaStock, ajusteStock } from '../services/stockService';
-const prisma = new PrismaClient();
 const TAMANIOS: TamanioCap[] = ['CHICA', 'MEDIANA', 'GRANDE'];
 export const getTintas = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;

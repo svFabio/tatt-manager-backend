@@ -111,6 +111,7 @@ export const getCitaDetails = async (citaId: number) => {
             tamano: cita.solicitud?.tamanoEnCm || 'No especificado',
             clienteNombre: cita.cliente?.nombre || 'Desconocido',
             artistaNombre: cita.artista?.nombre || 'Desconocido',
+            estado: cita.estadoCita,
         };
 
         return citaFormateada;

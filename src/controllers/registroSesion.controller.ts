@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
-import { descontarCaps } from '../services/stockService';
-const prisma = new PrismaClient();
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
+import { descontarCaps, descontarAgujas } from '../services/stockService';
 export const crearRegistroSesion = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const usuarioId = req.usuario!.id;
@@ -13,6 +13,7 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
     fotoResultadoUrl,
     observaciones,
     capsUsadas = [],
+    agujasUsadas = [],
   } = req.body;
   try {
     if (!citaId || cobroDelTrabajo === undefined || duracionEnHoras === undefined) {
@@ -69,6 +70,20 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
         }
         await descontarCaps(tx, capsUsadas, registro.id, usuarioId);
       }
+
+      if (agujasUsadas.length > 0) {
+        for (const aguja of agujasUsadas) {
+          await tx.agujasUsadas.create({
+            data: {
+              registroSesionId: registro.id,
+              agujaId: aguja.agujaId,
+              cantidadUsada: aguja.cantidadUsada,
+            },
+          });
+        }
+        await descontarAgujas(tx, agujasUsadas, registro.id, usuarioId);
+      }
+
       return registro;
     });
     const registroCompleto = await prisma.registroSesion.findUnique({
@@ -79,6 +94,9 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
         artista: { select: { id: true, nombre: true } },
         capsUsadas: {
           include: { tinta: { select: { id: true, nombre: true, color: true, colorHex: true } } },
+        },
+        agujasUsadas: {
+          include: { aguja: { select: { id: true, nombre: true, marca: true, tipo: true } } },
         },
       },
     });
@@ -93,7 +111,7 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
 };
 export const getRegistrosSesion = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
-  const { artistaId, desde, hasta } = req.query;
+  const { artistaId, desde, hasta, search } = req.query;
   try {
     const where: any = { negocioId };
     if (artistaId) {
@@ -104,12 +122,21 @@ export const getRegistrosSesion = async (req: Request, res: Response) => {
       if (desde) where.cerradaEn.gte = new Date(desde as string);
       if (hasta) where.cerradaEn.lte = new Date(hasta as string);
     }
+    if (search) {
+      where.cliente = { nombre: { contains: search as string, mode: 'insensitive' } };
+    }
     const registros = await prisma.registroSesion.findMany({
       where,
       include: {
-        cita: { select: { id: true, tipoCita: true, fechaHoraInicio: true } },
+        cita: { select: { id: true, tipoCita: true, fechaHoraInicio: true, zonaDelCuerpo: true } },
         cliente: { select: { id: true, nombre: true, numeroWhatsapp: true } },
         artista: { select: { id: true, nombre: true } },
+        capsUsadas: {
+          include: { tinta: { select: { id: true, nombre: true, color: true, colorHex: true, marca: true } } },
+        },
+        agujasUsadas: {
+          include: { aguja: { select: { id: true, nombre: true, marca: true, tipo: true, calibre: true } } },
+        },
       },
       orderBy: { cerradaEn: 'desc' },
     });
@@ -132,6 +159,11 @@ export const getRegistroSesionById = async (req: Request, res: Response) => {
         capsUsadas: {
           include: {
             tinta: { select: { id: true, nombre: true, marca: true, color: true, colorHex: true } },
+          },
+        },
+        agujasUsadas: {
+          include: {
+            aguja: { select: { id: true, nombre: true, marca: true, tipo: true, calibre: true } },
           },
         },
         movimientosInventario: {
