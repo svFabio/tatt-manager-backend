@@ -50,6 +50,7 @@ model Negocio {
   solicitudes        Solicitud[]
   registrosSesion    RegistroSesion[]
   tintas             Tinta[]
+  agujas             Aguja[]
   pagos              Pago[]
 }
 model Usuario {
@@ -195,6 +196,7 @@ model RegistroSesion {
   clienteId Int
   cliente   Cliente @relation(fields: [clienteId], references: [id])
   capsUsadas            CapsUsadas[]
+  agujasUsadas          AgujasUsadas[]
   movimientosInventario HistorialInventario[]
   @@index([negocioId, cerradaEn])
 }
@@ -238,8 +240,10 @@ model HistorialInventario {
   cantidad       Int
   motivo         String?
   registradoEn   DateTime       @default(now())
-  stockTintaId      Int
-  stockTinta        StockTinta      @relation(fields: [stockTintaId], references: [id])
+  stockTintaId      Int?
+  stockTinta        StockTinta?     @relation(fields: [stockTintaId], references: [id])
+  agujaId           Int?
+  aguja             Aguja?          @relation(fields: [agujaId], references: [id])
   registradoPorId   Int
   registradoPor     Usuario         @relation("RegistradoPor", fields: [registradoPorId], references: [id])
   registroSesionId  Int?
@@ -258,4 +262,30 @@ model Pago {
   cita            Cita?   @relation(fields: [citaId], references: [id])
   registradoPorId Int
   registradoPor   Usuario @relation("PagoRegistradoPor", fields: [registradoPorId], references: [id])
+}
+model Aguja {
+  id             Int      @id @default(autoincrement())
+  nombre         String
+  marca          String
+  tipo           String   // RL, RS, M1, RM
+  calibre        String?  
+  cantidadActual Int      @default(0)
+  cantidadMinima Int      @default(5)
+  activa         Boolean  @default(true)
+  creadaEn       DateTime @default(now())
+  actualizadoEn  DateTime @default(now())
+  negocioId      Int
+  negocio        Negocio  @relation(fields: [negocioId], references: [id])
+  agujasUsadas   AgujasUsadas[]
+  historial      HistorialInventario[]
+}
+model AgujasUsadas {
+  id               Int      @id @default(autoincrement())
+  cantidadUsada    Int
+  registroSesionId Int
+  registroSesion   RegistroSesion @relation(fields: [registroSesionId], references: [id])
+  agujaId          Int
+  aguja            Aguja          @relation(fields: [agujaId], references: [id])
+  
+  @@unique([registroSesionId, agujaId])
 }

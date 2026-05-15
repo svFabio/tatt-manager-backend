@@ -1,7 +1,7 @@
 
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
@@ -17,6 +17,7 @@ import clientesRoutes from './routes/clientes.route';
 import solicitudesRoutes from './routes/solicitudes.route';
 import registroSesionRoutes from './routes/registroSesion.route';
 import tintasRoutes from './routes/tintas.route';
+import agujasRoutes from './routes/agujas.route';
 import pagosRoutes from './routes/pagos.route';
 import {
     iniciarWhatsAppNegocio,
@@ -31,7 +32,7 @@ import { iniciarRecordatorios } from './services/reminderService';
 import { iniciarSurvey } from './services/surveyService';
 import { verificarToken } from './middleware/auth.middleware';
 import { tenantMiddleware } from './middleware/tenant.middleware';
-dotenv.config();
+
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
@@ -67,24 +68,26 @@ app.use((req, res, next) => {
 });
 app.get('/', (_req, res) => res.send('Backend funcionando 🚀'));
 app.get('/ping', (_req, res) => res.send('pong'));
-app.get('/api/status-whatsapp', (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); }, (req, res) => {
+const mockTenantMiddleware = (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); };
+
+app.get('/api/status-whatsapp', mockTenantMiddleware, (req, res) => {
     const estado = getEstadoWhatsApp(req.negocioId!);
     res.json({ ...estado, botsActivos: getBotsActivos() });
 });
-app.post('/api/start-whatsapp', (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); }, async (req, res) => {
+app.post('/api/start-whatsapp', mockTenantMiddleware, async (req, res) => {
     const resultado = await iniciarWhatsAppNegocio(req.negocioId!, io);
     if (resultado.error) return res.status(429).json({ error: resultado.error });
     res.json({ message: 'Bot iniciando. Espera el QR.' });
 });
-app.post('/api/logout', (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); }, async (req, res) => {
+app.post('/api/logout', mockTenantMiddleware, async (req, res) => {
     const resultado = await desvincularWhatsApp(req.negocioId!);
     res.json(resultado);
 });
-app.post('/api/restart-whatsapp', (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); }, async (req, res) => {
+app.post('/api/restart-whatsapp', mockTenantMiddleware, async (req, res) => {
     const resultado = await reiniciarWhatsApp(req.negocioId!, io);
     res.json(resultado);
 });
-app.post('/api/pairing-code', (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); }, async (req, res) => {
+app.post('/api/pairing-code', mockTenantMiddleware, async (req, res) => {
     const { telefono } = req.body;
     if (!telefono) return res.status(400).json({ error: 'El numero de telefono es requerido' });
     const resultado = await solicitarCodigoPairing(req.negocioId!, telefono, io);
@@ -101,6 +104,7 @@ app.use('/api/clientes', clientesRoutes);
 app.use('/api/solicitudes', solicitudesRoutes);
 app.use('/api/registro-sesion', registroSesionRoutes);
 app.use('/api/tintas', tintasRoutes);
+app.use('/api/agujas', agujasRoutes);
 app.use('/api/pagos', pagosRoutes);
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);
