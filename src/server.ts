@@ -19,6 +19,7 @@ import registroSesionRoutes from './routes/registroSesion.route';
 import tintasRoutes from './routes/tintas.route';
 import agujasRoutes from './routes/agujas.route';
 import pagosRoutes from './routes/pagos.route';
+import inventarioRoutes from './routes/inventario.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -106,6 +107,7 @@ app.use('/api/registro-sesion', registroSesionRoutes);
 app.use('/api/tintas', tintasRoutes);
 app.use('/api/agujas', agujasRoutes);
 app.use('/api/pagos', pagosRoutes);
+app.use('/api/inventario', inventarioRoutes);
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);
 });

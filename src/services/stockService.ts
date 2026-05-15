@@ -139,6 +139,45 @@ export async function ajusteStock(
 }
 
 /**
+ * Ajuste rápido de stock para una aguja (positivo o negativo, sin motivo del usuario)
+ */
+export async function ajusteRapidoAguja(
+  agujaId: number,
+  negocioId: number,
+  delta: number,
+  registradoPorId: number
+) {
+  const aguja = await prisma.aguja.findFirst({ where: { id: agujaId, negocioId } });
+  if (!aguja) throw { status: 404, message: `Aguja con ID ${agujaId} no encontrada` };
+
+  const nuevaCantidad = aguja.cantidadActual + delta;
+  if (nuevaCantidad < 0) {
+    throw {
+      status: 400,
+      message: `El ajuste dejaría el stock en negativo (actual: ${aguja.cantidadActual}, ajuste: ${delta})`,
+    };
+  }
+
+  const [agujaActualizada, historial] = await prisma.$transaction([
+    prisma.aguja.update({
+      where: { id: agujaId },
+      data: { cantidadActual: nuevaCantidad, actualizadoEn: new Date() },
+    }),
+    prisma.historialInventario.create({
+      data: {
+        tipoMovimiento: 'AJUSTE_MANUAL',
+        cantidad: delta,
+        motivo: 'Ajuste rápido desde inventario',
+        agujaId,
+        registradoPorId,
+      },
+    }),
+  ]);
+
+  return { aguja: agujaActualizada, historial };
+}
+
+/**
  * Descuenta el stock de agujas utilizadas en una sesión
  */
 export async function descontarAgujas(

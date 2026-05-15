@@ -216,6 +216,8 @@ model Tinta {
   marca    String
   color    String
   colorHex String   @db.Char(7)
+  fotoUrl        String?
+  fotoPublicId   String?
   activa   Boolean  @default(true)
   creadaEn DateTime @default(now())
   negocioId Int
@@ -267,8 +269,11 @@ model Aguja {
   id             Int      @id @default(autoincrement())
   nombre         String
   marca          String
-  tipo           String   // RL, RS, M1, RM
-  calibre        String?  
+  tipo           String   @default("AGUJA") // RL, RS, M1, RM
+  calibre        String?
+  categoria      String   @default("AGUJA") // AGUJA | CAP
+  fotoUrl        String?
+  fotoPublicId   String?
   cantidadActual Int      @default(0)
   cantidadMinima Int      @default(5)
   activa         Boolean  @default(true)
