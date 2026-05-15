@@ -1,8 +1,13 @@
-import { PrismaClient, TamanioCap, Prisma } from '@prisma/client';
-const prisma = new PrismaClient();
+import { TamanioCap, Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 type CapsUsadaInput = {
   tintaId: number;
   tamanioCap: TamanioCap;
+  cantidadUsada: number;
+};
+
+type AgujasUsadaInput = {
+  agujaId: number;
   cantidadUsada: number;
 };
 export async function descontarCaps(
@@ -51,6 +56,10 @@ export async function descontarCaps(
     });
   }
 }
+
+/**
+ * Registra una entrada manual de stock para una tinta específica
+ */
 export async function entradaStock(
   tintaId: number,
   tamanioCap: TamanioCap,
@@ -84,6 +93,10 @@ export async function entradaStock(
   ]);
   return { stock: updatedStock, historial };
 }
+
+/**
+ * Realiza un ajuste de stock (puede ser positivo o negativo) para correcciones de inventario
+ */
 export async function ajusteStock(
   tintaId: number,
   tamanioCap: TamanioCap,
@@ -123,4 +136,48 @@ export async function ajusteStock(
     }),
   ]);
   return { stock: updatedStock, historial };
+}
+
+/**
+ * Descuenta el stock de agujas utilizadas en una sesión
+ */
+export async function descontarAgujas(
+  tx: Prisma.TransactionClient,
+  agujasUsadas: AgujasUsadaInput[],
+  registroSesionId: number,
+  registradoPorId: number
+): Promise<void> {
+  for (const agujaUsada of agujasUsadas) {
+    const aguja = await tx.aguja.findUnique({
+      where: { id: agujaUsada.agujaId },
+    });
+    if (!aguja) {
+      throw {
+        status: 400,
+        message: `No existe aguja con ID ${agujaUsada.agujaId}`,
+      };
+    }
+    if (aguja.cantidadActual < agujaUsada.cantidadUsada) {
+      throw {
+        status: 400,
+        message: `Stock insuficiente para aguja "${aguja.nombre}" (${aguja.marca}): disponible ${aguja.cantidadActual}, solicitado ${agujaUsada.cantidadUsada}`,
+      };
+    }
+    await tx.aguja.update({
+      where: { id: aguja.id },
+      data: {
+        cantidadActual: { decrement: agujaUsada.cantidadUsada },
+        actualizadoEn: new Date(),
+      },
+    });
+    await tx.historialInventario.create({
+      data: {
+        tipoMovimiento: 'DESCUENTO_SESION',
+        cantidad: -agujaUsada.cantidadUsada,
+        agujaId: aguja.id,
+        registradoPorId,
+        registroSesionId,
+      },
+    });
+  }
 }

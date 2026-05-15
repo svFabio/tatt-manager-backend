@@ -1,1 +1,26 @@
-import cron from 'node-cron';import { PrismaClient } from '@prisma/client';const prisma = new PrismaClient();export const iniciarCronJobs = () => {    console.log('[Cron] 🕒 Iniciando planificador de tareas...');    cron.schedule('*/5 * * * *', async () => {        console.log('[Cron] 🧹 Ejecutando limpieza de sesiones expiradas...');        try {            const limiteTiempo = new Date(Date.now() - 30 * 60 * 1000);             const resultado = await prisma.sesionChat.deleteMany({                where: {                    ultimoMensaje: {                        lt: limiteTiempo                    }                }            });            if (resultado.count > 0) {                console.log(`[Cron] ✅ Se eliminaron ${resultado.count} sesiones inactivas.`);            } else {                console.log('[Cron] Ninguna sesión expirada encontrada.');            }        } catch (error) {            console.error('[Cron] ❌ Error en limpieza de sesiones:', error);        }    });};
+import cron from 'node-cron';
+import { prisma } from '../lib/prisma';
+
+export const iniciarCronJobs = () => {
+    console.log('[Cron] 🕒 Iniciando planificador de tareas...');
+    cron.schedule('*/5 * * * *', async () => {
+        console.log('[Cron] 🧹 Ejecutando limpieza de sesiones expiradas...');
+        try {
+            const limiteTiempo = new Date(Date.now() - 30 * 60 * 1000); 
+            const resultado = await prisma.sesionChat.deleteMany({
+                where: {
+                    ultimoMensaje: {
+                        lt: limiteTiempo
+                    }
+                }
+            });
+            if (resultado.count > 0) {
+                console.log(`[Cron] ✅ Se eliminaron ${resultado.count} sesiones inactivas.`);
+            } else {
+                console.log('[Cron] Ninguna sesión expirada encontrada.');
+            }
+        } catch (error) {
+            console.error('[Cron] ❌ Error en limpieza de sesiones:', error);
+        }
+    });
+};

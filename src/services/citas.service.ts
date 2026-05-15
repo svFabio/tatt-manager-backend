@@ -1,7 +1,5 @@
-import { PrismaClient} from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
-
-const prisma = new PrismaClient();
 const HORARIOS_DEFINIDOS = ["13:00", "14:00", "15:00", "16:00", "17:00"];
 
 export class CitasService {

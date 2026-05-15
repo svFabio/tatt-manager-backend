@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
-const prisma = new PrismaClient();
 export const getSolicitudes = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { estado } = req.query;
@@ -96,10 +95,10 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
     let mensajeWhatsAppEnviado = false;
     if (solicitudActualizada.cliente && solicitudActualizada.cliente.numeroWhatsapp) {
       const numero = solicitudActualizada.cliente.numeroWhatsapp;
-      
+
       // Buscar el último mensaje de este número para saber si es @s.whatsapp.net o @lid
       const ultimoMensaje = await prisma.mensajeChat.findFirst({
-        where: { 
+        where: {
           negocioId,
           remoteJid: { startsWith: numero }
         },
@@ -107,15 +106,33 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
       });
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
-      
-      const mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido cotizada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n\nPor favor, contáctanos para más detalles o para agendar tu cita.`;
-      mensajeWhatsAppEnviado = await enviarMensaje(negocioId, jid, mensaje);
-    }
 
-    if (!mensajeWhatsAppEnviado && solicitudActualizada.cliente?.numeroWhatsapp) {
-      return res.status(200).json({ 
-        data: solicitudActualizada, 
-        error: null, 
+      const mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n\n¿Para qué fecha te gustaría agendar tu cita? (Ej. "mañana", "el próximo viernes", "20 de mayo")`;
+      mensajeWhatsAppEnviado = await enviarMensaje(negocioId, jid, mensaje);
+
+      if (mensajeWhatsAppEnviado) {
+        const datosSesion = {
+          solicitudId: solicitudActualizada.id,
+          horasEstimadas: horasEstimadas,
+          nombre: solicitudActualizada.cliente.nombre,
+          precioCotizado: precioCotizado
+        };
+
+        const sesionExistente = await prisma.sesionChat.findUnique({ where: { id: jid } });
+        if (sesionExistente) {
+          await prisma.sesionChat.update({
+            where: { id: jid },
+            data: { estado: 'ESPERANDO_FECHA', datos: datosSesion, ultimoMensaje: new Date() }
+          });
+        } else {
+          await prisma.sesionChat.create({
+            data: { id: jid, negocioId, estado: 'ESPERANDO_FECHA', datos: datosSesion }
+          });
+        }
+      }
+      return res.status(200).json({
+        data: solicitudActualizada,
+        error: null,
         warning: 'La cotización se guardó correctamente, pero no se pudo enviar el mensaje por WhatsApp. Asegúrate de que el bot esté conectado.'
       });
     }
