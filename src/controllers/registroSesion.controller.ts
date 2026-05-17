@@ -85,6 +85,9 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
       }
 
       return registro;
+    }, {
+      maxWait: 10000,
+      timeout: 20000,
     });
     const registroCompleto = await prisma.registroSesion.findUnique({
       where: { id: resultado.id },
@@ -153,7 +156,9 @@ export const getRegistroSesionById = async (req: Request, res: Response) => {
     const registro = await prisma.registroSesion.findFirst({
       where: { id: parseInt(id), negocioId },
       include: {
-        cita: true,
+        cita: {
+          include: { solicitud: true }
+        },
         cliente: true,
         artista: { select: { id: true, nombre: true, email: true } },
         capsUsadas: {

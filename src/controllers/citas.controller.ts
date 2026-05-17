@@ -47,9 +47,10 @@ export const getResumen = async (req: Request, res: Response) => {
 
 export const getHorariosDisponibles = async (req: Request, res: Response) => {
   try {
-    const { fecha } = req.query;
+    const { fecha, duracion } = req.query;
     if (!fecha) return res.status(400).json({ error: 'Fecha requerida' });
-    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string);
+    const duracionHoras = duracion ? Number(duracion) : 1;
+    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, duracionHoras);
     res.json({ horarios, fecha });
   } catch (error) {
     console.error("Error obteniendo horarios:", error);

@@ -19,6 +19,7 @@ import registroSesionRoutes from './routes/registroSesion.route';
 import tintasRoutes from './routes/tintas.route';
 import agujasRoutes from './routes/agujas.route';
 import pagosRoutes from './routes/pagos.route';
+import inventarioRoutes from './routes/inventario.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -42,7 +43,8 @@ const io = new Server(httpServer, {
 });
 app.use(helmet());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const allowedOrigins = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
     : [];
@@ -106,6 +108,7 @@ app.use('/api/registro-sesion', registroSesionRoutes);
 app.use('/api/tintas', tintasRoutes);
 app.use('/api/agujas', agujasRoutes);
 app.use('/api/pagos', pagosRoutes);
+app.use('/api/inventario', inventarioRoutes);
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);
 });

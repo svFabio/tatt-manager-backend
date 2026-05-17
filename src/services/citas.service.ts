@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
-const HORARIOS_DEFINIDOS = ["13:00", "14:00", "15:00", "16:00", "17:00"];
+import { getAvailableSlots, getBusinessHours } from './calendarService';
 
 export class CitasService {
     static async getPendientes(negocioId: number) {
@@ -58,6 +58,9 @@ export class CitasService {
     static async getAgenda(negocioId: number, desde?: string, hasta?: string) {
         const fechaDesde = desde ? new Date(desde) : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
         const fechaHasta = hasta ? new Date(hasta) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        if (hasta) {
+            fechaHasta.setUTCHours(23, 59, 59, 999);
+        }
         return await prisma.cita.findMany({
             where: {
                 negocioId,
@@ -91,85 +94,93 @@ export class CitasService {
         return { citasHoy, pendientes, proximasCitas, totalFuturas };
     }
 
-    static async getHorariosDisponibles(negocioId: number, fecha: string) {
+    static async getHorariosDisponibles(negocioId: number, fecha: string, duracionHoras: number = 1) {
         const [year, month, day] = fecha.split('-').map(Number);
-        const inicio = new Date(year, month - 1, day);
-        inicio.setHours(0, 0, 0, 0);
-        const fin = new Date(inicio);
-        fin.setHours(23, 59, 59, 999);
-
-        const ocupadas = await prisma.cita.findMany({
-            where: { negocioId, fechaHoraInicio: { gte: inicio, lte: fin }, estadoCita: { notIn: ['CANCELADA'] } },
-            select: { fechaHoraInicio: true }
-        });
-
-        const horasOcupadas = ocupadas.filter(c => c.fechaHoraInicio).map(c => {
-            const h = c.fechaHoraInicio!.getHours().toString().padStart(2, '0');
-            const m = c.fechaHoraInicio!.getMinutes().toString().padStart(2, '0');
-            return `${h}:${m}`;
-        });
-        let disponibles = HORARIOS_DEFINIDOS.filter(h => !horasOcupadas.includes(h));
-
-        const ahora = new Date(new Date().toLocaleString("en-US", { timeZone: "America/La_Paz" }));
-        const esHoy = ahora.getFullYear() === year && ahora.getMonth() === (month - 1) && ahora.getDate() === day;
-
-        if (esHoy) {
-            const horaActual = ahora.getHours();
-            const minutoActual = ahora.getMinutes();
-            disponibles = disponibles.filter(horario => {
-                const [hora, minuto] = horario.split(':').map(Number);
-                return hora > horaActual || (hora === horaActual && minuto > minutoActual);
-            });
-        }
-        return disponibles;
+        const date = new Date(year, month - 1, day);
+        return getAvailableSlots(negocioId, date, duracionHoras);
     }
 
     static async crearCitaAdmin(negocioId: number, data: any) {
-        const { clienteNombre, clienteTelefono, fecha, horario } = data;
+        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion } = data;
 
-        const telefonoLimpio = clienteTelefono.replace(/\D/g, '');
-        if (telefonoLimpio.length < 8) throw { status: 400, message: 'El teléfono debe tener al menos 8 dígitos numéricos.' };
-        if (!HORARIOS_DEFINIDOS.includes(horario)) throw { status: 400, message: `Horario inválido.` };
+        const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
+        if (telefonoLimpio.replace(/[^0-9]/g, '').length < 7) throw { status: 400, message: 'El teléfono debe tener al menos 7 dígitos numéricos.' };
+
+        // Validate horario against real available slots
+        const duracion = Number(durInput) || 1;
+        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion);
+        if (!slotsDisponibles.includes(horario)) {
+            throw { status: 400, message: `Horario no disponible. Horarios libres: ${slotsDisponibles.join(', ') || 'ninguno'}` };
+        }
 
         const [year, month, day] = fecha.split('-').map(Number);
         const fechaCita = new Date(year, month - 1, day);
         const [horas, minutos] = horario.split(':').map(Number);
         fechaCita.setHours(horas, minutos, 0, 0);
-        const fechaFin = new Date(fechaCita.getTime() + 60 * 60 * 1000);
 
-        let cliente = await prisma.cliente.findUnique({ where: { numeroWhatsapp: telefonoLimpio } });
+        const fechaFin = new Date(fechaCita);
+        fechaFin.setHours(fechaFin.getHours() + duracion);
+
+        let cliente = await prisma.cliente.findUnique({
+            where: { numeroWhatsapp: telefonoLimpio }
+        });
+
         if (!cliente) {
             cliente = await prisma.cliente.create({
                 data: { nombre: clienteNombre, numeroWhatsapp: telefonoLimpio, negocioId }
             });
+        } else if (cliente.nombre !== clienteNombre.trim()) {
+            // Admin typed a different name — update the client record
+            cliente = await prisma.cliente.update({
+                where: { id: cliente.id },
+                data: { nombre: clienteNombre.trim() }
+            });
         }
 
-        const citaExistente = await prisma.cita.findFirst({
-            where: { negocioId, fechaHoraInicio: fechaCita, estadoCita: { not: 'CANCELADA' } }
+        // Check for overlapping appointments (range overlap, not just exact match)
+        const citaSolapada = await prisma.cita.findFirst({
+            where: {
+                negocioId,
+                estadoCita: { not: 'CANCELADA' },
+                fechaHoraInicio: { lt: fechaFin },
+                fechaHoraFin: { gt: fechaCita },
+            }
         });
-        if (citaExistente) throw { status: 409, message: 'Este horario ya está ocupado.' };
+        if (citaSolapada) throw { status: 409, message: 'Este horario se solapa con otra cita existente.' };
 
         return await prisma.cita.create({
-            data: { negocioId, clienteId: cliente.id, fechaHoraInicio: fechaCita, fechaHoraFin: fechaFin, duracionEnHoras: 1, estadoCita: 'CONFIRMADA', seniaPagada: 50 },
+            data: {
+                negocioId,
+                clienteId: cliente.id,
+                fechaHoraInicio: fechaCita,
+                fechaHoraFin: fechaFin,
+                duracionEnHoras: duracion,
+                estadoCita: 'CONFIRMADA',
+                zonaDelCuerpo: zonaDelCuerpo || null,
+                tamanoEnCm: tamanoEnCm || null,
+                seniaPagada: Number(cotizacion) || 0,
+            },
             include: { cliente: true }
         });
     }
 
     static async reprogramarCita(id: number, negocioId: number, fecha: string, horario: string) {
-        if (!HORARIOS_DEFINIDOS.includes(horario)) throw { status: 400, message: `Horario inválido.` };
+        const citaActual = await prisma.cita.findUnique({ where: { id, negocioId }, include: { cliente: true } });
+        if (!citaActual) throw { status: 404, message: 'Cita no encontrada' };
+
+        const duracion = Number(citaActual.duracionEnHoras) || 1;
+
+        // Validate against real available slots
+        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion);
+        if (!slotsDisponibles.includes(horario)) {
+            throw { status: 400, message: `Horario no disponible. Horarios libres: ${slotsDisponibles.join(', ') || 'ninguno'}` };
+        }
+
         const [year, month, day] = fecha.split('-').map(Number);
         const nuevaFecha = new Date(year, month - 1, day);
         const [horas, minutos] = horario.split(':').map(Number);
         nuevaFecha.setHours(horas, minutos, 0, 0);
-        const nuevaFechaFin = new Date(nuevaFecha.getTime() + 60 * 60 * 1000);
-
-        const citaActual = await prisma.cita.findUnique({ where: { id, negocioId }, include: { cliente: true } });
-        if (!citaActual) throw { status: 404, message: 'Cita no encontrada' };
-
-        const ocupado = await prisma.cita.findFirst({
-            where: { negocioId, fechaHoraInicio: nuevaFecha, estadoCita: { not: 'CANCELADA' }, NOT: { id } }
-        });
-        if (ocupado) throw { status: 409, message: 'Ese horario ya está ocupado.' };
+        const nuevaFechaFin = new Date(nuevaFecha.getTime() + duracion * 60 * 60 * 1000);
 
         return await prisma.cita.update({
             where: { id },

@@ -21,34 +21,56 @@ export async function descontarCaps(
       where: {
         tintaId_tamanioCap: {
           tintaId: cap.tintaId,
-          tamanioCap: cap.tamanioCap,
+          tamanioCap: 'CHICA', // Siempre usamos CHICA porque ahora representa el stock global en ml
         },
       },
-      include: { tinta: { select: { nombre: true, color: true } } },
+      include: { tinta: { select: { nombre: true, color: true, negocioId: true } } },
     });
     if (!stock) {
       throw {
         status: 400,
-        message: `No existe stock para tinta ID ${cap.tintaId} en tamaño ${cap.tamanioCap}`,
+        message: `No existe stock registrado para la tinta ID ${cap.tintaId}`,
       };
     }
-    if (stock.cantidadActual < cap.cantidadUsada) {
+    
+    // Obtener la capacidad en ml del tipo de Cap seleccionado en el inventario del negocio
+    const capInventario = await tx.aguja.findFirst({
+      where: {
+        negocioId: stock.tinta.negocioId,
+        categoria: 'CAP',
+        tipo: cap.tamanioCap,
+        activa: true,
+      }
+    });
+
+    // Si el usuario registró un Cap de ese tamaño, usamos su calibre en ml. Si no, usamos un fallback por defecto.
+    let mlPorCap = cap.tamanioCap === 'GRANDE' ? 3 : cap.tamanioCap === 'MEDIANA' ? 2 : 1;
+    if (capInventario && capInventario.calibre) {
+      const parsedMl = parseFloat(capInventario.calibre);
+      if (!isNaN(parsedMl) && parsedMl > 0) {
+        mlPorCap = parsedMl;
+      }
+    }
+
+    const mlUsados = cap.cantidadUsada * mlPorCap;
+
+    if (stock.cantidadActual < mlUsados) {
       throw {
         status: 400,
-        message: `Stock insuficiente para "${stock.tinta.nombre}" (${stock.tinta.color}) tamaño ${cap.tamanioCap}: disponible ${stock.cantidadActual}, solicitado ${cap.cantidadUsada}`,
+        message: `Stock insuficiente para "${stock.tinta.nombre}" (${stock.tinta.color}): disponible ${stock.cantidadActual} ml, necesario ${mlUsados} ml (por ${cap.cantidadUsada} cap(s) ${cap.tamanioCap})`,
       };
     }
     await tx.stockTinta.update({
       where: { id: stock.id },
       data: {
-        cantidadActual: { decrement: cap.cantidadUsada },
+        cantidadActual: { decrement: mlUsados },
         actualizadoEn: new Date(),
       },
     });
     await tx.historialInventario.create({
       data: {
         tipoMovimiento: 'DESCUENTO_SESION',
-        cantidad: -cap.cantidadUsada,
+        cantidad: -mlUsados,
         stockTintaId: stock.id,
         registradoPorId,
         registroSesionId,
@@ -136,6 +158,45 @@ export async function ajusteStock(
     }),
   ]);
   return { stock: updatedStock, historial };
+}
+
+/**
+ * Ajuste rápido de stock para una aguja (positivo o negativo, sin motivo del usuario)
+ */
+export async function ajusteRapidoAguja(
+  agujaId: number,
+  negocioId: number,
+  delta: number,
+  registradoPorId: number
+) {
+  const aguja = await prisma.aguja.findFirst({ where: { id: agujaId, negocioId } });
+  if (!aguja) throw { status: 404, message: `Aguja con ID ${agujaId} no encontrada` };
+
+  const nuevaCantidad = aguja.cantidadActual + delta;
+  if (nuevaCantidad < 0) {
+    throw {
+      status: 400,
+      message: `El ajuste dejaría el stock en negativo (actual: ${aguja.cantidadActual}, ajuste: ${delta})`,
+    };
+  }
+
+  const [agujaActualizada, historial] = await prisma.$transaction([
+    prisma.aguja.update({
+      where: { id: agujaId },
+      data: { cantidadActual: nuevaCantidad, actualizadoEn: new Date() },
+    }),
+    prisma.historialInventario.create({
+      data: {
+        tipoMovimiento: 'AJUSTE_MANUAL',
+        cantidad: delta,
+        motivo: 'Ajuste rápido desde inventario',
+        agujaId,
+        registradoPorId,
+      },
+    }),
+  ]);
+
+  return { aguja: agujaActualizada, historial };
 }
 
 /**
