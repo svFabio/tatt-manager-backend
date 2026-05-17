@@ -99,6 +99,7 @@ model Cita {
   estadoCita       EstadoCita @default(PENDIENTE)
   estiloDeTatuaje  String?
   zonaDelCuerpo    String?
+  tamanoEnCm       String?
   seniaPagada      Decimal    @default(0) @db.Decimal(10, 2)
   creadoEn        DateTime @default(now())
   negocioId   Int

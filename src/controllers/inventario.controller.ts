@@ -19,13 +19,14 @@ type ItemInventario = {
   unidad: 'ml' | 'un';
   esBajo: boolean;
   colorHex?: string;
+  fotoUrl?: string;
 };
 
 function normalizarTinta(stock: any): ItemInventario {
   return {
     tipo: 'tinta',
     refId: stock.id,
-    nombre: `${stock.tinta.nombre} · ${CAP_LABEL[stock.tamanioCap] ?? stock.tamanioCap}`,
+    nombre: stock.tinta.nombre, // Solo el nombre, sin etiquetas de Cap
     marca: stock.tinta.marca,
     cantidadActual: stock.cantidadActual,
     cantidadMinima: stock.cantidadMinima,
@@ -55,9 +56,12 @@ export const getInventario = async (req: Request, res: Response) => {
   try {
     const [stocks, agujas] = await Promise.all([
       prisma.stockTinta.findMany({
-        where: { tinta: { negocioId, activa: true } },
+        where: { 
+          tinta: { negocioId, activa: true },
+          tamanioCap: 'CHICA' // Solo traemos la 'CHICA' que ahora representa el stock global en ml
+        },
         include: { tinta: { select: { nombre: true, marca: true, colorHex: true } } },
-        orderBy: [{ tinta: { nombre: 'asc' } }, { tamanioCap: 'asc' }],
+        orderBy: [{ tinta: { nombre: 'asc' } }],
       }),
       prisma.aguja.findMany({
         where: { negocioId, activa: true },
@@ -210,20 +214,21 @@ export const crearInsumo = async (req: Request, res: Response) => {
           fotoUrl,
           fotoPublicId,
           stock: {
-            create: CAP_TAMANIOS.map((tamanioCap) => ({
-              tamanioCap,
+            create: [{
+              tamanioCap: 'CHICA', // Usamos CHICA como valor por defecto para representar el stock global en ml
               cantidadActual: inicial,
               cantidadMinima: minimo,
-            })),
+            }],
           },
         },
         include: { stock: true },
       });
 
-      const items: ItemInventario[] = tinta.stock.map((s) => ({
+      const s = tinta.stock[0];
+      const items: ItemInventario[] = [{
         tipo: 'tinta',
         refId: s.id,
-        nombre: `${tinta.nombre} · ${CAP_LABEL[s.tamanioCap] ?? s.tamanioCap}`,
+        nombre: tinta.nombre, // Solo el nombre de la tinta, sin etiquetas de Cap
         marca: tinta.marca,
         cantidadActual: s.cantidadActual,
         cantidadMinima: s.cantidadMinima,
@@ -231,7 +236,7 @@ export const crearInsumo = async (req: Request, res: Response) => {
         esBajo: s.cantidadActual < s.cantidadMinima,
         colorHex: tinta.colorHex,
         fotoUrl: tinta.fotoUrl ?? undefined,
-      }));
+      }];
 
       return res.status(201).json({ ok: true, data: items });
     }
@@ -243,6 +248,8 @@ export const crearInsumo = async (req: Request, res: Response) => {
         nombre: nombre.trim(),
         marca: marca.trim(),
         categoria,
+        tipo: categoria === 'CAP' ? (req.body.capSize || 'CHICA') : 'AGUJA',
+        calibre: categoria === 'CAP' ? (req.body.capMl || '1') : undefined,
         fotoUrl,
         fotoPublicId,
         cantidadActual: inicial,
@@ -255,5 +262,116 @@ export const crearInsumo = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error creando insumo:', error);
     res.status(500).json({ ok: false, error: 'Error al guardar el ítem' });
+  }
+};
+
+export const editarInsumo = async (req: Request, res: Response) => {
+  const negocioId = req.negocioId!;
+  const { tipo, refId, nombre, marca, cantidadMinima } = req.body;
+
+  if (!tipo || !refId || !nombre || !marca || cantidadMinima === undefined) {
+    return res.status(400).json({ ok: false, error: 'Faltan campos obligatorios' });
+  }
+
+  try {
+    if (tipo === 'aguja') {
+      const aguja = await prisma.aguja.findUnique({ where: { id: Number(refId) } });
+      if (!aguja || aguja.negocioId !== negocioId) {
+        return res.status(404).json({ ok: false, error: 'Aguja no encontrada' });
+      }
+
+      const updatedAguja = await prisma.aguja.update({
+        where: { id: Number(refId) },
+        data: {
+          nombre: nombre,
+          marca: marca,
+          cantidadMinima: Number(cantidadMinima),
+        },
+      });
+
+      res.json({ ok: true, data: normalizarAguja(updatedAguja) });
+
+    } else if (tipo === 'tinta') {
+      const stock = await prisma.stockTinta.findUnique({
+        where: { id: Number(refId) },
+        include: { tinta: true },
+      });
+      if (!stock || stock.tinta.negocioId !== negocioId) {
+        return res.status(404).json({ ok: false, error: 'Tinta no encontrada' });
+      }
+
+      // If they send "Black Ink · Cap M", we extract "Black Ink"
+      const baseNombre = nombre.split(' · ')[0].trim();
+
+      const [updatedTinta, updatedStock] = await prisma.$transaction([
+        prisma.tinta.update({
+          where: { id: stock.tintaId },
+          data: {
+            nombre: baseNombre,
+            marca: marca,
+          },
+        }),
+        prisma.stockTinta.update({
+          where: { id: Number(refId) },
+          data: {
+            cantidadMinima: Number(cantidadMinima),
+          },
+          include: { tinta: true }
+        })
+      ]);
+
+      res.json({ ok: true, data: normalizarTinta(updatedStock) });
+
+    } else {
+      return res.status(400).json({ ok: false, error: 'Tipo de insumo inválido' });
+    }
+
+  } catch (error) {
+    console.error('Error editando insumo:', error);
+    res.status(500).json({ ok: false, error: 'Error al editar el insumo' });
+  }
+};
+
+export const eliminarInsumo = async (req: Request, res: Response) => {
+  const negocioId = req.negocioId!;
+  const { tipo, refId } = req.params;
+
+  if (!tipo || !refId) {
+    return res.status(400).json({ ok: false, error: 'Faltan parámetros obligatorios' });
+  }
+
+  try {
+    if (tipo === 'aguja') {
+      const aguja = await prisma.aguja.findUnique({ where: { id: Number(refId) } });
+      if (!aguja || aguja.negocioId !== negocioId) {
+        return res.status(404).json({ ok: false, error: 'Aguja no encontrada' });
+      }
+      await prisma.aguja.update({
+        where: { id: Number(refId) },
+        data: { activa: false }
+      });
+    } else if (tipo === 'tinta') {
+      const stock = await prisma.stockTinta.findUnique({
+        where: { id: Number(refId) },
+        include: { tinta: true },
+      });
+      if (!stock || stock.tinta.negocioId !== negocioId) {
+        return res.status(404).json({ ok: false, error: 'Tinta no encontrada' });
+      }
+      
+      // Soft-delete the entire Tinta since we cannot hard-delete StockTinta due to Historial constraints
+      await prisma.tinta.update({
+        where: { id: stock.tintaId },
+        data: { activa: false }
+      });
+      
+    } else {
+      return res.status(400).json({ ok: false, error: 'Tipo de insumo inválido' });
+    }
+
+    res.json({ ok: true, data: { message: 'Insumo eliminado exitosamente' } });
+  } catch (error) {
+    console.error('Error eliminando insumo:', error);
+    res.status(500).json({ ok: false, error: 'Error al eliminar el insumo' });
   }
 };

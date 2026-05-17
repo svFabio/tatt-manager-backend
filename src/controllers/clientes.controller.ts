@@ -53,7 +53,7 @@ export const crearCliente = async (req: Request, res: Response) => {
     if (nombre.trim().length < 2) {
       return res.status(400).json({ data: null, error: 'El nombre debe tener al menos 2 caracteres' });
     }
-    const telefonoLimpio = numeroWhatsapp.replace(/\D/g, '');
+    const telefonoLimpio = numeroWhatsapp.replace(/[^0-9+]/g, '');
     if (telefonoLimpio.length < 8) {
       return res.status(400).json({ data: null, error: 'El número de WhatsApp debe tener al menos 8 dígitos' });
     }
