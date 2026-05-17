@@ -156,7 +156,9 @@ export const getRegistroSesionById = async (req: Request, res: Response) => {
     const registro = await prisma.registroSesion.findFirst({
       where: { id: parseInt(id), negocioId },
       include: {
-        cita: true,
+        cita: {
+          include: { solicitud: true }
+        },
         cliente: true,
         artista: { select: { id: true, nombre: true, email: true } },
         capsUsadas: {
