@@ -41,6 +41,7 @@ model Negocio {
   nombre    String   @default("Mi Negocio")
   plan      Plan     @default(FREE)
   creadoEn  DateTime @default(now())
+  codigoInvitacion String?
   usuarios      Usuario[]
   citas         Cita[]
   sesionesChat  SesionChat[]

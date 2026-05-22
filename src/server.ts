@@ -20,6 +20,7 @@ import tintasRoutes from './routes/tintas.route';
 import agujasRoutes from './routes/agujas.route';
 import pagosRoutes from './routes/pagos.route';
 import inventarioRoutes from './routes/inventario.route';
+import negocioRoutes from './routes/negocio.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -109,6 +110,7 @@ app.use('/api/tintas', tintasRoutes);
 app.use('/api/agujas', agujasRoutes);
 app.use('/api/pagos', pagosRoutes);
 app.use('/api/inventario', inventarioRoutes);
+app.use('/api/negocio', negocioRoutes);
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);
 });
