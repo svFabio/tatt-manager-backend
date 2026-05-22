@@ -27,7 +27,8 @@ import {
     desvincularWhatsApp,
     reiniciarWhatsApp,
     getBotsActivos,
-    solicitarCodigoPairing
+    solicitarCodigoPairing,
+    iniciarWhatsApp
 } from './services/whatsappClient';
 import { iniciarCronJobs } from './services/cleanupService';
 import { iniciarRecordatorios } from './services/reminderService';
@@ -119,5 +120,6 @@ httpServer.listen(Number(PORT), '0.0.0.0', () => {
     iniciarCronJobs();
     iniciarRecordatorios();
     iniciarSurvey();
+    iniciarWhatsApp(io); // <--- Auto-conecta todos los bots
 });
 export default app;

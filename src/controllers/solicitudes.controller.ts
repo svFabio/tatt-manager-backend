@@ -51,7 +51,7 @@ export const getSolicitudById = async (req: Request, res: Response) => {
 export const cotizarSolicitud = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { id } = req.params;
-  const { precioCotizado, horasEstimadas, seniaRequerida, artistaId } = req.body;
+  const { precioCotizado, horasEstimadas, seniaRequerida, artistaId, mensajePersonalizado } = req.body;
   try {
     if (precioCotizado === undefined || precioCotizado === null) {
       return res.status(400).json({ data: null, error: 'precioCotizado es requerido' });
@@ -107,7 +107,11 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
 
-      const mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n\n¿Para qué fecha te gustaría agendar tu cita? (Ej. "mañana", "el próximo viernes", "20 de mayo")`;
+      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
+      if (mensajePersonalizado) {
+        mensaje += `\n💬 *Mensaje del estudio:* ${mensajePersonalizado}\n`;
+      }
+      mensaje += `\n¿Para qué fecha te gustaría agendar tu cita? (Ej. "mañana", "el próximo viernes", "20 de mayo")`;
       mensajeWhatsAppEnviado = await enviarMensaje(negocioId, jid, mensaje);
 
       if (mensajeWhatsAppEnviado) {
