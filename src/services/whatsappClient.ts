@@ -81,6 +81,7 @@ interface BotInstance {
 }
 
 const bots = new Map<number, BotInstance>();
+const initializingBots = new Set<number>(); // Mutex para evitar clones
 
 export const resolverTelefonoReal = (jid: string, negocioId?: number): string => {
     const numero = jid.split('@')[0];
@@ -98,50 +99,70 @@ const normalizarTelefono = (valor: string): string => valor.replace(/\D/g, '');
 const esTelefonoValido = (valor: string): boolean => /^\d{7,}$/.test(valor);
 
 const obtenerTelefonoCliente = (msg: any, remoteJid: string, negocioId: number): string | null => {
+    const fromMe = msg.key?.fromMe;
+    if (fromMe) return null;
+
     const candidatos = [
         resolverTelefonoReal(remoteJid, negocioId),
-        remoteJid.split('@')[0],
-        msg?.key?.participant,
         msg?.key?.participantPn,
+        msg?.key?.participant,
         msg?.participant,
     ];
 
+    // Intentar buscar el teléfono real primero (normalmente menos de 15 dígitos)
     for (const candidato of candidatos) {
         if (!candidato || typeof candidato !== 'string') continue;
         const numero = normalizarTelefono(candidato.split('@')[0]);
-        if (esTelefonoValido(numero)) return numero;
+        if (esTelefonoValido(numero) && numero.length < 14) {
+            return numero;
+        }
+    }
+
+    // Fallback: Si WhatsApp no nos da el número real (ej. por dispositivo vinculado o privacidad)
+    // usamos el ID único de lid (2728...) para que no se rompa el flujo
+    const numeroFallback = normalizarTelefono(remoteJid.split('@')[0]);
+    if (esTelefonoValido(numeroFallback)) {
+        return numeroFallback;
     }
 
     return null;
 };
 
-export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Promise<{ error?: string }> => {
+export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Promise<{ error?: string, message?: string }> => {
     if (bots.has(negocioId)) {
+        console.log(`[Bot:${negocioId}] Ya está en memoria, no reiniciamos.`);
         const bot = bots.get(negocioId)!;
         io.emit(`whatsapp-status-${negocioId}`, { conectado: bot.conectado, qr: bot.qr });
         return {};
     }
+
+    if (initializingBots.has(negocioId)) {
+        console.log(`[Bot:${negocioId}] Inicialización ya en progreso, ignorando petición duplicada.`);
+        return { message: 'Bot iniciando...' };
+    }
+
     if (bots.size >= MAX_BOTS_ACTIVOS) {
         console.warn(`[Bot] ⚠️ Límite de bots activos alcanzado (${MAX_BOTS_ACTIVOS}). Negocio ${negocioId} no puede iniciar.`);
         return { error: `Límite de bots activos alcanzado (máximo ${MAX_BOTS_ACTIVOS}). Contacta al soporte para ampliar el límite.` };
     }
+    initializingBots.add(negocioId); // Bloqueamos nuevas peticiones
 
-    const sessionId = `negocio-${negocioId}`;
-    const { state, saveCreds } = await usePrismaAuthState(sessionId);
-    const { version } = await fetchLatestBaileysVersion();
+    try {
+        const sessionId = `negocio-${negocioId}`;
+        const { state, saveCreds } = await usePrismaAuthState(sessionId);
+        const { version } = await fetchLatestBaileysVersion();
 
-    console.log(`[Bot:${negocioId}] Iniciando con Baileys v${version.join('.')}...`);
+        console.log(`[Bot:${negocioId}] Iniciando con Baileys v${version.join('.')}...`);
 
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }),
-        auth: state,
-        browser: [`Negocio-${negocioId} Bot`, 'Chrome', '1.0.0'],
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000,
-        emitOwnEvents: false,
-    });
-
+        const sock = makeWASocket({
+            version,
+            logger: pino({ level: 'silent' }),
+            auth: state,
+            browser: [`Negocio-${negocioId} Bot`, 'Chrome', '1.0.0'],
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            emitOwnEvents: false,
+        });
     const instance: BotInstance = {
         sock,
         conectado: false,
@@ -283,7 +304,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 const cmd = textMessage.trim().toLowerCase();
 
                 // Cancel commands
-                if (['cancelar', 'salir', 'adios', 'reiniciar', 'chau'].includes(cmd)) {
+                if (/\b(cancelar|salir|adi[oó]s|reiniciar|chau|ya no)\b/i.test(cmd)) {
                     await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
                     await botInstance.sock.sendMessage(remoteJid, { text: '👋 Entendido, cancelamos el proceso. ¡Hasta pronto!' });
                     continue;
@@ -359,6 +380,18 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                     }
 
                     case 'ESPERANDO_FOTO': {
+                        // Candado atómico: evitamos la condición de carrera si envían 2 fotos al mismo tiempo.
+                        const lock = await prisma.sesionChat.updateMany({
+                            where: { id: remoteJid, negocioId, estado: 'ESPERANDO_FOTO' },
+                            data: { estado: 'PROCESANDO_SOLICITUD' }
+                        });
+                        
+                        if (lock.count === 0) {
+                            // Otra foto ya se está procesando o el estado cambió. Ignoramos este mensaje.
+                            console.log(`[Bot:${negocioId}] Candado activado: ignorando imagen duplicada de ${remoteJid}`);
+                            continue;
+                        }
+
                         let fotoUrl: string | null = null;
                         const noTieneFoto = ['no', 'no tengo', 'nop', 'nope', 'sin foto', 'ninguna'].includes(cmd);
 
@@ -374,10 +407,14 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             } catch (uploadError) {
                                 console.error(`[Bot:${negocioId}] Error subiendo foto:`, uploadError);
                                 respuesta = '❌ Hubo un error al subir la foto. Intenta enviarla de nuevo o escribe *"no"* para continuar sin foto.';
+                                // Liberar el candado si falla
+                                await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FOTO' } });
                                 break;
                             }
                         } else if (!noTieneFoto) {
                             respuesta = '📸 Por favor envía una *imagen* de referencia o escribe *"no"* si no tienes una.';
+                            // Liberar el candado porque no era imagen válida ni 'no'
+                            await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FOTO' } });
                             break;
                         }
 
@@ -418,7 +455,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                 descripcion: solicitud.descripcion,
                             });
 
-                            respuesta = `✅ *¡Solicitud registrada con éxito!*\n\n📋 *Resumen:*\n👤 Nombre: ${datosFinales.nombre}\n📱 Teléfono: ${telefonoCliente}\n🎨 Tattoo: ${datosFinales.descripcionTattoo}\n📏 Tamaño: ${datosFinales.tamanio}\n💪 Zona: ${datosFinales.zona}\n📸 Foto: ${fotoUrl ? 'Sí' : 'No'}\n\nNuestro equipo revisará tu solicitud y te contactará pronto. ¡Gracias! 🙏`;
+                            respuesta = `✅ *¡Solicitud registrada con éxito!*\n\n📋 *Resumen:*\n👤 Nombre: ${datosFinales.nombre}\n📱 ID de Cliente: ${telefonoCliente}\n🎨 Tattoo: ${datosFinales.descripcionTattoo}\n📏 Tamaño: ${datosFinales.tamanio}\n💪 Zona: ${datosFinales.zona}\n📸 Foto: ${fotoUrl ? 'Sí' : 'No'}\n\nNuestro equipo revisará tu solicitud y te contactará pronto. ¡Gracias! 🙏`;
 
                             await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
                         } catch (dbError) {
@@ -470,6 +507,40 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                         const match = horaElegida.match(horaRegex);
                         
                         if (!match) {
+                            const posibleFecha = parsearFechaNatural(textMessage);
+                            if (posibleFecha && posibleFecha.confianza !== 'baja') {
+                                const fechaConsultada = posibleFecha.fecha;
+                                const hoy = new Date();
+                                hoy.setHours(0, 0, 0, 0);
+
+                                if (fechaConsultada < hoy) {
+                                    respuesta = 'No podemos viajar en el tiempo 🕰️😅. Por favor elige una fecha que sea a partir de hoy.';
+                                } else {
+                                    const horasTatuaje = Number(datos.horasEstimadas) || 1;
+                                    const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje);
+                                    
+                                    if (disponibles.length === 0) {
+                                        respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no me quedan horarios que puedan acomodar las ${horasTatuaje} horas que tomará tu tatuaje. 😢\n\n¿Te gustaría intentar con otra fecha?`;
+                                        await prisma.sesionChat.updateMany({
+                                            where: { id: remoteJid, negocioId },
+                                            data: { estado: 'ESPERANDO_FECHA' }
+                                        });
+                                    } else {
+                                        const listaHorarios = disponibles.map(h => `- *${h}*`).join('\n');
+                                        respuesta = `¡Entendido! Cambiamos al *${formatearFechaAmigable(fechaConsultada)}*. Tengo los siguientes horarios disponibles:\n\n${listaHorarios}\n\nEscribe la hora que prefieres.`;
+                                        
+                                        await prisma.sesionChat.updateMany({
+                                            where: { id: remoteJid, negocioId },
+                                            data: { 
+                                                estado: 'ESPERANDO_HORA', 
+                                                datos: { ...datos, fechaSeleccionada: fechaConsultada }
+                                            }
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+
                             respuesta = 'Por favor, escribe la hora en formato válido. Ej: "14:00", "16:30".';
                             break;
                         }
@@ -527,6 +598,11 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                         respuesta = 'Algo salió mal. Escribe el comando de inicio para comenzar de nuevo.';
                 }
 
+                // Simulación Humana (Anti-Ban)
+                // Calculamos un delay basado en la longitud de la respuesta (aprox 30ms por carácter, max 4s)
+                const delaySimulado = Math.min(Math.max(respuesta.length * 30, 1500), 4000);
+                await new Promise(resolve => setTimeout(resolve, delaySimulado));
+
                 // Send response
                 await botInstance.sock.sendMessage(remoteJid, { text: respuesta });
                 await botInstance.sock.sendPresenceUpdate('paused', remoteJid);
@@ -549,7 +625,13 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
         }
     });
 
+    initializingBots.delete(negocioId);
     return {};
+    } catch (initErr) {
+        initializingBots.delete(negocioId);
+        console.error(`[Bot:${negocioId}] Error en inicialización:`, initErr);
+        return { error: 'Falló la inicialización del bot.' };
+    }
 };
 
 // --- Utility Exports (unchanged) ---
@@ -618,7 +700,39 @@ export const enviarMensaje = async (negocioId: number, remoteJid: string, text: 
     }
 };
 
-export const iniciarWhatsApp = (io: Server) => iniciarWhatsAppNegocio(1, io);
+export const iniciarWhatsApp = async (io: Server) => {
+    try {
+        console.log('[Bot] 🔄 Buscando sesiones de WhatsApp activas en la base de datos...');
+        // Buscamos todas las credenciales guardadas. Tienen formato "session-negocio-X-creds"
+        const sesionesActivas = await prisma.baileysSession.findMany({
+            where: {
+                id: {
+                    endsWith: '-creds'
+                }
+            }
+        });
+
+        if (sesionesActivas.length === 0) {
+            console.log('[Bot] 📭 No hay sesiones activas guardadas.');
+            return;
+        }
+
+        for (const sesion of sesionesActivas) {
+            // Extraer el negocioId del id (ej: "session-negocio-1-creds")
+            const match = sesion.id.match(/session-negocio-(\d+)-creds/);
+            if (match && match[1]) {
+                const negocioId = parseInt(match[1]);
+                console.log(`[Bot] 🔌 Reconectando automáticamente negocio ${negocioId}...`);
+                // Inicializamos el bot sin bloquear el ciclo
+                iniciarWhatsAppNegocio(negocioId, io).catch(err => {
+                    console.error(`[Bot] Error auto-conectando negocio ${negocioId}:`, err);
+                });
+            }
+        }
+    } catch (error) {
+        console.error('[Bot] ❌ Error al buscar sesiones activas:', error);
+    }
+};
 
 export const solicitarCodigoPairing = async (
     negocioId: number,
