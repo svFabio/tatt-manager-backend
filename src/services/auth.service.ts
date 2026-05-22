@@ -7,10 +7,21 @@ import { JWT_EXPIRES_IN } from '../config';
 const JWT_SECRET = process.env.JWT_SECRET!;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-export const mobileTokenStore = new Map<string, { data: any; expiry: number }>();
+export interface SessionData {
+    token: string;
+    userId: number;
+    userName: string;
+    userEmail: string;
+    userRol: string;
+    negocioId: number;
+    negocioNombre: string;
+    negocioPlan: string;
+}
+
+export const mobileTokenStore = new Map<string, { data: SessionData; expiry: number }>();
 
 export class AuthService {
-    static async handleGoogleLogin(googleToken: string, rawUserInfo: any) {
+    static async handleGoogleLogin(googleToken: string, rawUserInfo: Record<string, unknown> | null) {
         let googleId: string;
         let email: string;
         let nombre: string;
@@ -134,7 +145,7 @@ export class AuthService {
         };
     }
 
-    static async handleGoogleMobileCallback(code: string, state: any) {
+    static async handleGoogleMobileCallback(code: string, state: string) {
         const backendUrl = process.env.BACKEND_URL;
         if (!backendUrl) throw { status: 500, message: 'Variable de entorno BACKEND_URL no configurada.' };
         
@@ -151,13 +162,13 @@ export class AuthService {
             }),
         });
         
-        const tokens = await tokenRes.json() as any;
+        const tokens = await tokenRes.json() as { access_token?: string };
         if (!tokens.access_token) throw { status: 401, message: 'No se pudo obtener el token de Google' };
 
         const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${tokens.access_token}` },
         });
-        const userInfo = await userInfoRes.json() as any;
+        const userInfo = await userInfoRes.json() as { sub: string; email: string; name?: string };
         const { sub: googleId, email, name } = userInfo;
 
         let negocio = await prisma.negocio.findUnique({ where: { googleId } });

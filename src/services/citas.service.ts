@@ -2,6 +2,29 @@ import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
 import { getAvailableSlots, getBusinessHours } from './calendarService';
 
+export interface CrearCitaAdminDTO {
+    clienteNombre: string;
+    clienteTelefono: string;
+    fecha: string;
+    horario: string;
+    duracionEnHoras?: number | string;
+    zonaDelCuerpo?: string;
+    tamanoEnCm?: string;
+    cotizacion?: number | string;
+}
+
+export interface CrearCitaTatuajeDTO {
+    fechaHoraInicio: string;
+    duracionEnHoras: number | string;
+    tipoCita?: string;
+    artistaId: number;
+    clienteId: number;
+    solicitudId?: number;
+    estiloDeTatuaje?: string;
+    zonaDelCuerpo?: string;
+    seniaPagada?: number;
+}
+
 export class CitasService {
     static async getPendientes(negocioId: number) {
         return await prisma.cita.findMany({
@@ -100,7 +123,7 @@ export class CitasService {
         return getAvailableSlots(negocioId, date, duracionHoras);
     }
 
-    static async crearCitaAdmin(negocioId: number, data: any) {
+    static async crearCitaAdmin(negocioId: number, data: CrearCitaAdminDTO) {
         const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion } = data;
 
         const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
@@ -200,7 +223,7 @@ export class CitasService {
 
         return await prisma.cita.update({
             where: { id },
-            data: { estadoCita: nuevoEstado as any }
+            data: { estadoCita: nuevoEstado as import('@prisma/client').EstadoCita }
         });
     }
 
@@ -211,10 +234,10 @@ export class CitasService {
         });
     }
 
-    static async crearCitaTatuaje(negocioId: number, input: any) {
+    static async crearCitaTatuaje(negocioId: number, input: CrearCitaTatuajeDTO) {
         const { fechaHoraInicio, duracionEnHoras: duracionInput, tipoCita = 'tatuaje', artistaId, clienteId, solicitudId, estiloDeTatuaje, zonaDelCuerpo, seniaPagada = 0 } = input;
 
-        const duracionEnHoras = tipoCita === 'consulta' ? 0.5 : parseFloat(duracionInput);
+        const duracionEnHoras = tipoCita === 'consulta' ? 0.5 : parseFloat(String(duracionInput));
         if (!duracionEnHoras || duracionEnHoras <= 0) throw { status: 400, message: 'duracionEnHoras debe ser mayor a 0' };
 
         const inicio = new Date(fechaHoraInicio);
@@ -299,7 +322,7 @@ export class CitasService {
 
         return await prisma.cita.update({
             where: { id },
-            data: { estadoCita: estadoFaltante as any },
+            data: { estadoCita: estadoFaltante as import('@prisma/client').EstadoCita },
         });
     }
 
