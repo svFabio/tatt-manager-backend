@@ -86,7 +86,7 @@ export const googleMobileCallback = async (req: Request, res: Response) => {
 
     if (error || !code) return htmlError('Login cancelado');
     try {
-        const { usuario } = await AuthService.handleGoogleMobileCallback(code as string, state);
+        const { usuario } = await AuthService.handleGoogleMobileCallback(code as string, state as string);
         return res.send(`
             <html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#1e293b;color:white">
             <div style="max-width:400px;margin:0 auto">
