@@ -144,22 +144,82 @@ export const googleMobileStart = (req: Request, res: Response) => {
 
 export const googleMobileCallback = async (req: Request, res: Response) => {
     const { code, error, state } = req.query;
+
+    const baseStyles = `
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: 'Inter', -apple-system, sans-serif;
+                background: #0A0A0A;
+                color: #FFFFFF;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }
+            .card {
+                background: #1E1E1E;
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 24px;
+                padding: 48px 32px;
+                max-width: 380px;
+                width: 100%;
+                text-align: center;
+            }
+            .icon-box {
+                width: 72px; height: 72px;
+                border-radius: 18px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 24px;
+                font-size: 32px;
+            }
+            .icon-success { background: rgba(34, 197, 94, 0.15); }
+            .icon-error { background: rgba(239, 68, 68, 0.15); }
+            h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+            .text-success { color: #22C55E; }
+            .text-error { color: #EF4444; }
+            p { color: #6B7280; font-size: 14px; line-height: 1.5; margin-top: 8px; }
+            .hint {
+                margin-top: 24px;
+                padding: 12px 16px;
+                background: rgba(67, 56, 202, 0.08);
+                border: 1px solid rgba(67, 56, 202, 0.15);
+                border-radius: 12px;
+                color: #9CA3AF;
+                font-size: 13px;
+            }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+            .card { animation: fadeIn 0.4s ease-out; }
+        </style>`;
+
     const htmlError = (msg: string) => res.send(`
-        <html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f1f5f9">
-        <h2 style="color:#ef4444">Error: ${msg}</h2>
-        <p>Cierra esta ventana y vuelve a intentarlo.</p>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1">${baseStyles}</head>
+        <body>
+            <div class="card">
+                <div class="icon-box icon-error">✕</div>
+                <h2 class="text-error">Error</h2>
+                <p>${msg}</p>
+                <div class="hint">Cierra esta ventana y vuelve a intentarlo desde la app.</div>
+            </div>
         </body></html>`);
 
     if (error || !code) return htmlError('Login cancelado');
     try {
         const { usuario } = await AuthService.handleGoogleMobileCallback(code as string, state as string);
         return res.send(`
-            <html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#1e293b;color:white">
-            <div style="max-width:400px;margin:0 auto">
-            <div style="width:64px;height:64px;background:#6366f1;border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:28px;font-weight:800">TM</div>
-            <h2 style="color:#22c55e;margin-bottom:8px">Login exitoso</h2>
-            <p style="color:#94a3b8">Hola, ${usuario.nombre}. Puedes cerrar esta ventana y regresar a la app.</p>
-            </div></body></html>`);
+            <html><head><meta name="viewport" content="width=device-width, initial-scale=1">${baseStyles}</head>
+            <body>
+                <div class="card">
+                    <div class="icon-box icon-success">✓</div>
+                    <h2 class="text-success">¡Login exitoso!</h2>
+                    <p>Hola, <strong style="color:#fff">${usuario.nombre}</strong>. Tu sesión está lista.</p>
+                    <div class="hint">Ya puedes cerrar esta ventana y regresar a la app.</div>
+                </div>
+            </body></html>`);
     } catch (err: any) {
         console.error('[Auth] Error en googleMobileCallback:', err);
         return htmlError(err.message || 'Error del servidor');
