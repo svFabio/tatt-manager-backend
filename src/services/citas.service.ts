@@ -26,9 +26,11 @@ export interface CrearCitaTatuajeDTO {
 }
 
 export class CitasService {
-    static async getPendientes(negocioId: number) {
+    static async getPendientes(negocioId: number, artistaId?: number) {
+        const whereClause: any = { negocioId, estadoCita: 'PENDIENTE' };
+        if (artistaId) whereClause.artistaId = artistaId;
         return await prisma.cita.findMany({
-            where: { negocioId, estadoCita: 'PENDIENTE' },
+            where: whereClause,
             orderBy: { creadoEn: 'desc' },
             include: { cliente: true, solicitud: true }
         });
@@ -78,18 +80,22 @@ export class CitasService {
         return citaActualizada;
     }
 
-    static async getAgenda(negocioId: number, desde?: string, hasta?: string) {
+    static async getAgenda(negocioId: number, desde?: string, hasta?: string, artistaId?: number) {
         const fechaDesde = desde ? new Date(desde) : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
         const fechaHasta = hasta ? new Date(hasta) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         if (hasta) {
             fechaHasta.setUTCHours(23, 59, 59, 999);
         }
+        
+        const whereClause: any = {
+            negocioId,
+            fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
+            estadoCita: { not: 'CANCELADA' }
+        };
+        if (artistaId) whereClause.artistaId = artistaId;
+
         return await prisma.cita.findMany({
-            where: {
-                negocioId,
-                fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
-                estadoCita: { not: 'CANCELADA' }
-            },
+            where: whereClause,
             orderBy: { fechaHoraInicio: 'asc' },
             include: { cliente: true, artista: true }
         });
@@ -243,7 +249,7 @@ export class CitasService {
         const inicio = new Date(fechaHoraInicio);
         const fin = new Date(inicio.getTime() + duracionEnHoras * 60 * 60 * 1000);
 
-        const artista = await prisma.usuario.findFirst({ where: { id: artistaId, negocioId } });
+        const artista = await prisma.usuario.findFirst({ where: { id: artistaId, membresias: { some: { negocioId } } } });
         if (!artista) throw { status: 404, message: 'Artista no encontrado en este negocio' };
 
         const cliente = await prisma.cliente.findFirst({ where: { id: clienteId, negocioId } });
