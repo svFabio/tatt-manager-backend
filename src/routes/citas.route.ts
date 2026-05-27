@@ -13,7 +13,8 @@ import {
     crearCitaTatuaje,
     getDisponibilidad,
     confirmarCita,
-    cancelarCita
+    cancelarCita,
+    getArtistasDisponibles
 } from '../controllers/citas.controller';
 import {
     listarSolicitudes,
@@ -29,6 +30,7 @@ import { tenantMiddleware } from '../middleware/tenant.middleware';
 router.use(verificarToken, tenantMiddleware);
 
 router.get('/', getAgenda);
+router.get('/artistas', getArtistasDisponibles);
 router.get('/pendientes', getPendientes);
 router.get('/resumen', getResumen);
 router.get('/horarios-disponibles', getHorariosDisponibles);

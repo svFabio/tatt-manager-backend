@@ -11,6 +11,7 @@ export interface CrearCitaAdminDTO {
     zonaDelCuerpo?: string;
     tamanoEnCm?: string;
     cotizacion?: number | string;
+    artistaId?: number;
 }
 
 export interface CrearCitaTatuajeDTO {
@@ -123,21 +124,21 @@ export class CitasService {
         return { citasHoy, pendientes, proximasCitas, totalFuturas };
     }
 
-    static async getHorariosDisponibles(negocioId: number, fecha: string, duracionHoras: number = 1) {
+    static async getHorariosDisponibles(negocioId: number, fecha: string, duracionHoras: number = 1, artistaId?: number) {
         const [year, month, day] = fecha.split('-').map(Number);
         const date = new Date(year, month - 1, day);
-        return getAvailableSlots(negocioId, date, duracionHoras);
+        return getAvailableSlots(negocioId, date, duracionHoras, artistaId);
     }
 
     static async crearCitaAdmin(negocioId: number, data: CrearCitaAdminDTO) {
-        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion } = data;
+        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId } = data;
 
         const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
         if (telefonoLimpio.replace(/[^0-9]/g, '').length < 7) throw { status: 400, message: 'El teléfono debe tener al menos 7 dígitos numéricos.' };
 
         // Validate horario against real available slots
         const duracion = Number(durInput) || 1;
-        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion);
+        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion, artistaId);
         if (!slotsDisponibles.includes(horario)) {
             throw { status: 400, message: `Horario no disponible. Horarios libres: ${slotsDisponibles.join(', ') || 'ninguno'}` };
         }
@@ -188,6 +189,7 @@ export class CitasService {
                 zonaDelCuerpo: zonaDelCuerpo || null,
                 tamanoEnCm: tamanoEnCm || null,
                 seniaPagada: Number(cotizacion) || 0,
+                artistaId: artistaId || null,
             },
             include: { cliente: true }
         });
