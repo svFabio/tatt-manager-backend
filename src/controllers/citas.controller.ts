@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { CitasService } from '../services/citas.service';
+import { getArtistasDelNegocio } from '../services/calendarService';
 
 export const getPendientes = async (req: Request, res: Response) => {
   try {
@@ -51,10 +52,11 @@ export const getResumen = async (req: Request, res: Response) => {
 
 export const getHorariosDisponibles = async (req: Request, res: Response) => {
   try {
-    const { fecha, duracion } = req.query;
+    const { fecha, duracion, artistaId } = req.query;
     if (!fecha) return res.status(400).json({ error: 'Fecha requerida' });
     const duracionHoras = duracion ? Number(duracion) : 1;
-    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, duracionHoras);
+    const aId = artistaId ? Number(artistaId) : undefined;
+    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, duracionHoras, aId);
     res.json({ horarios, fecha });
   } catch (error) {
     console.error("Error obteniendo horarios:", error);
@@ -194,5 +196,15 @@ export const cancelarCita = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error cancelando cita:', error);
     res.status(error.status || 500).json({ data: null, error: error.message || 'Error al cancelar cita' });
+  }
+};
+
+export const getArtistasDisponibles = async (req: Request, res: Response) => {
+  try {
+    const artistas = await getArtistasDelNegocio(req.negocioId!);
+    res.json(artistas);
+  } catch (error) {
+    console.error('Error obteniendo artistas disponibles:', error);
+    res.status(500).json({ error: 'Error al obtener artistas disponibles' });
   }
 };
