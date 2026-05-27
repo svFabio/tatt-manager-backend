@@ -4,10 +4,16 @@ import { enviarMensaje } from '../services/whatsappClient';
 export const getSolicitudes = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { estado } = req.query;
+  const rol = req.estudioActivo?.rol;
+  const usuarioId = req.usuario?.id;
   try {
     const where: any = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
       where.estado = estado as string;
+    }
+    // ARTISTA solo ve solicitudes asignadas a él
+    if (rol === 'ARTISTA' && usuarioId) {
+      where.artistaId = usuarioId;
     }
     const solicitudes = await prisma.solicitud.findMany({
       where,
@@ -70,7 +76,7 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
     }
     if (artistaId) {
       const artista = await prisma.usuario.findFirst({
-        where: { id: artistaId, negocioId },
+        where: { id: artistaId, membresias: { some: { negocioId } } },
       });
       if (!artista) {
         return res.status(404).json({ data: null, error: 'Artista no encontrado en este negocio' });
@@ -82,8 +88,8 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
         estado: 'COTIZADA',
         precioCotizado,
         horasEstimadas,
-        seniaRequerida: seniaRequerida || null,
-        artistaId: artistaId || null,
+        seniaRequerida: seniaRequerida !== undefined ? seniaRequerida : solicitud.seniaRequerida,
+        artistaId: artistaId !== undefined ? artistaId : solicitud.artistaId,
         cotizadaEn: new Date(),
       },
       include: {
@@ -119,7 +125,9 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
           solicitudId: solicitudActualizada.id,
           horasEstimadas: horasEstimadas,
           nombre: solicitudActualizada.cliente.nombre,
-          precioCotizado: precioCotizado
+          precioCotizado: precioCotizado,
+          artistaId: solicitudActualizada.artistaId,
+          artistaNombre: solicitudActualizada.artista?.nombre || 'el artista asignado'
         };
 
         const sesionExistente = await prisma.sesionChat.findUnique({ where: { id: jid } });

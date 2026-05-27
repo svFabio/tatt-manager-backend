@@ -36,13 +36,13 @@ enum TamanioCap {
 }
 model Negocio {
   id        Int      @id @default(autoincrement())
-  googleId  String   @unique 
-  email     String   @unique
+  googleId  String?  @unique
+  email     String?
   nombre    String   @default("Mi Negocio")
   plan      Plan     @default(FREE)
   creadoEn  DateTime @default(now())
-  codigoInvitacion String?
-  usuarios      Usuario[]
+  codigoInvitacion String?  @unique
+  miembros      MiembroEstudio[]
   citas         Cita[]
   sesionesChat  SesionChat[]
   mensajesChat  MensajeChat[]
@@ -55,20 +55,30 @@ model Negocio {
   pagos              Pago[]
 }
 model Usuario {
-  id        Int      @id @default(autoincrement())
-  nombre    String
-  email     String   @unique
-  password  String   @default("") 
-  googleId  String?  
-  rol       Rol      @default(ARTISTA)
-  creadoEn  DateTime @default(now())
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  id            Int      @id @default(autoincrement())
+  nombre        String
+  email         String   @unique
+  password      String   @default("")
+  googleId      String?  @unique
+  authProvider  String   @default("email")
+  creadoEn      DateTime @default(now())
+  membresias    MiembroEstudio[]
   citasComoArtista        Cita[]               @relation("CitaArtista")
   solicitudesComoArtista  Solicitud[]          @relation("SolicitudArtista")
   registrosSesion         RegistroSesion[]     @relation("RegistroArtista")
   historialInventario     HistorialInventario[] @relation("RegistradoPor")
   pagosRegistrados        Pago[]               @relation("PagoRegistradoPor")
+}
+model MiembroEstudio {
+  id         Int      @id @default(autoincrement())
+  rol        Rol      @default(ARTISTA)
+  unidoEn    DateTime @default(now())
+  usuarioId  Int
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  negocioId  Int
+  negocio    Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  @@unique([usuarioId, negocioId])
+  @@index([negocioId])
 }
 model BaileysSession {
   id    String @id

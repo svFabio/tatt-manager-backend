@@ -114,7 +114,13 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
 };
 export const getRegistrosSesion = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
-  const { artistaId, desde, hasta, search } = req.query;
+  let { artistaId, desde, hasta, search } = req.query;
+
+  const rol = req.estudioActivo?.rol;
+  if (rol === 'ARTISTA') {
+    artistaId = req.usuario?.id?.toString();
+  }
+
   try {
     const where: any = { negocioId };
     if (artistaId) {
@@ -131,7 +137,15 @@ export const getRegistrosSesion = async (req: Request, res: Response) => {
     const registros = await prisma.registroSesion.findMany({
       where,
       include: {
-        cita: { select: { id: true, tipoCita: true, fechaHoraInicio: true, zonaDelCuerpo: true } },
+        cita: { 
+          select: { 
+            id: true, 
+            tipoCita: true, 
+            fechaHoraInicio: true, 
+            zonaDelCuerpo: true,
+            solicitud: { select: { zonaDelCuerpo: true } } 
+          } 
+        },
         cliente: { select: { id: true, nombre: true, numeroWhatsapp: true } },
         artista: { select: { id: true, nombre: true } },
         capsUsadas: {

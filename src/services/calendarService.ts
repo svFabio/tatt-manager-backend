@@ -26,17 +26,36 @@ const minutesToTime = (totalMinutes: number): string => {
 };
 
 /**
- * Obtiene los horarios dinámicos del negocio.
- * En el futuro esto consultará a la BD usando `negocioId`.
+ * Obtiene los horarios dinámicos del negocio desde la BD.
+ * Si no hay configuración, devuelve defaults razonables.
  */
 export const getBusinessHours = async (negocioId: number): Promise<BusinessHours> => {
-    //TODO: Leer de prisma.configuracion.horarios
+    try {
+        const config = await prisma.configuracion.findUnique({ where: { negocioId } });
+        if (config && config.horarios) {
+            const horarios = config.horarios as any;
+            // Si tiene formato open/close directo
+            if (horarios.open && horarios.close) {
+                return {
+                    open: horarios.open,
+                    close: horarios.close,
+                    breakStart: horarios.breakStart || undefined,
+                    breakEnd: horarios.breakEnd || undefined,
+                    intervalMinutes: horarios.intervalMinutes || 60,
+                };
+            }
+        }
+    } catch (e) {
+        console.error(`[Calendar] Error leyendo horarios del negocio ${negocioId}:`, e);
+    }
+
+    // Defaults si no existe configuración
     return {
         open: "09:00",
         close: "21:00",
         breakStart: "12:00",
         breakEnd: "14:00",
-        intervalMinutes: 60, // Intervalos de 1 hora
+        intervalMinutes: 60,
     };
 };
 
@@ -49,11 +68,8 @@ export interface CitaExistente {
  * Verifica si un rango de tiempo cruza o está dentro de un descanso.
  */
 const crossesBreak = (startMins: number, endMins: number, breakStartMins: number, breakEndMins: number): boolean => {
-    // Si empieza después o igual al fin del descanso, está bien
     if (startMins >= breakEndMins) return false;
-    // Si termina antes o igual al inicio del descanso, está bien
     if (endMins <= breakStartMins) return false;
-    // En cualquier otro caso, hay superposición
     return true;
 };
 
@@ -64,9 +80,6 @@ const hasOverlap = (startMins: number, endMins: number, appointments: CitaExiste
     for (const appt of appointments) {
         const apptStart = timeToMinutes(appt.horaInicio);
         const apptEnd = timeToMinutes(appt.horaFin);
-        
-        // Si mi cita termina después de que empieza la otra, 
-        // y mi cita empieza antes de que termine la otra, hay choque.
         if (startMins < apptEnd && endMins > apptStart) {
             return true;
         }
@@ -76,15 +89,17 @@ const hasOverlap = (startMins: number, endMins: number, appointments: CitaExiste
 
 /**
  * Obtiene los slots de horarios disponibles para una fecha específica.
+ * Si se pasa artistaId, solo revisa las citas de ESE artista.
+ * Si no se pasa, revisa TODAS las citas del negocio (comportamiento legacy).
  */
 export const getAvailableSlots = async (
     negocioId: number, 
     date: Date, 
-    durationHours: number
+    durationHours: number,
+    artistaId?: number
 ): Promise<string[]> => {
     const config = await getBusinessHours(negocioId);
     
-    // 1. Convertir todo a minutos para facilitar el cálculo
     const openMins = timeToMinutes(config.open);
     const closeMins = timeToMinutes(config.close);
     const durationMins = durationHours * 60;
@@ -92,24 +107,26 @@ export const getAvailableSlots = async (
     const breakStartMins = config.breakStart ? timeToMinutes(config.breakStart) : null;
     const breakEndMins = config.breakEnd ? timeToMinutes(config.breakEnd) : null;
 
-    // 2. Obtener citas existentes en ese día para ese negocio
+    // Obtener citas existentes en ese día
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
+    // Filtrar por artista si se proporcionó, sino por todo el negocio
+    const whereClause: any = {
+        negocioId,
+        estadoCita: { in: ['CONFIRMADA', 'PENDIENTE'] },
+        fechaHoraInicio: { gte: startOfDay, lte: endOfDay }
+    };
+
+    if (artistaId) {
+        whereClause.artistaId = artistaId;
+    }
+
     const existingAppointmentsDB = await prisma.cita.findMany({
-        where: {
-            negocioId,
-            estadoCita: {
-                in: ['CONFIRMADA', 'PENDIENTE']
-            },
-            fechaHoraInicio: {
-                gte: startOfDay,
-                lte: endOfDay
-            }
-        },
+        where: whereClause,
         select: {
             fechaHoraInicio: true,
             fechaHoraFin: true,
@@ -125,7 +142,6 @@ export const getAvailableSlots = async (
 
     const validSlots: string[] = [];
 
-    // 3. Generar y filtrar intervalos
     const now = new Date();
     const isToday = startOfDay.getTime() === new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const currentMinsNow = now.getHours() * 60 + now.getMinutes();
@@ -141,24 +157,45 @@ export const getAvailableSlots = async (
 
         // Regla A: Cierre del estudio
         if (proposedEndMins > closeMins) {
-            continue; // Termina después del horario de cierre
+            continue;
         }
 
         // Regla B: Cruce con descanso
         if (breakStartMins !== null && breakEndMins !== null) {
             if (crossesBreak(proposedStartMins, proposedEndMins, breakStartMins, breakEndMins)) {
-                continue; // Atraviesa el descanso
+                continue;
             }
         }
 
-        // Regla C: Superposición de citas
+        // Regla C: Superposición de citas del artista
         if (hasOverlap(proposedStartMins, proposedEndMins, existingAppointments)) {
-            continue; // Choca con otra cita
+            continue;
         }
 
-        // Si pasa todas las validaciones, el slot es válido
         validSlots.push(minutesToTime(proposedStartMins));
     }
 
     return validSlots;
+};
+
+/**
+ * Obtiene la lista de artistas (miembros con rol ARTISTA) del negocio.
+ */
+export const getArtistasDelNegocio = async (negocioId: number) => {
+    const miembros = await prisma.miembroEstudio.findMany({
+        where: { negocioId, rol: 'ARTISTA' },
+        include: { usuario: { select: { id: true, nombre: true } } }
+    });
+
+    // También incluir ADMINs que pueden tatuar
+    const admins = await prisma.miembroEstudio.findMany({
+        where: { negocioId, rol: 'ADMIN' },
+        include: { usuario: { select: { id: true, nombre: true } } }
+    });
+
+    const todos = [...miembros, ...admins];
+    return todos.map(m => ({
+        id: m.usuario.id,
+        nombre: m.usuario.nombre
+    }));
 };

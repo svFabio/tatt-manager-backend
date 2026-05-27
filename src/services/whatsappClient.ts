@@ -7,7 +7,7 @@ import { prisma } from '../lib/prisma';
 import { v2 as cloudinary } from 'cloudinary';
 import { ContextoConversacion, EstadoConversacion } from './aiService';
 import { MAX_BOTS_ACTIVOS } from '../config';
-import { getAvailableSlots } from './calendarService';
+import { getAvailableSlots, getArtistasDelNegocio } from './calendarService';
 import { parsearFechaNatural, formatearFechaAmigable } from './dateParser';
 
 import dotenv from 'dotenv';
@@ -158,7 +158,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
             version,
             logger: pino({ level: 'silent' }),
             auth: state,
-            browser: [`Negocio-${negocioId} Bot`, 'Chrome', '1.0.0'],
+            browser: ['Ubuntu', 'Chrome', '110.0.5481.177'],
             connectTimeoutMs: 60000,
             keepAliveIntervalMs: 10000,
             emitOwnEvents: false,
@@ -300,6 +300,11 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
             if (!botInstance) continue;
 
             try {
+                // Simulación de lectura humana (1 a 3 segundos) antes de empezar a escribir
+                const delayLectura = Math.floor(Math.random() * 2000) + 1000;
+                await new Promise(resolve => setTimeout(resolve, delayLectura));
+                await botInstance.sock.readMessages([msg.key]);
+
                 await botInstance.sock.sendPresenceUpdate('composing', remoteJid);
                 const cmd = textMessage.trim().toLowerCase();
 
@@ -315,7 +320,10 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
 
                 switch (contexto.estado) {
                     case 'INICIO': {
-                        respuesta = '🎨 ¡Hola! Bienvenido/a al estudio de tatuajes.\n\nPara continuar, te pediremos unos datos.\n\n¿Cuál es tu *nombre completo*?';
+                        // Obtener nombre del negocio
+                        const negocio = await prisma.negocio.findUnique({ where: { id: negocioId }, select: { nombre: true } });
+                        const nombreEstudio = negocio?.nombre || 'nuestro estudio de tatuajes';
+                        respuesta = `🎨 ¡Hola! 👋 Bienvenido/a a *${nombreEstudio}*.\n\nAntes de comenzar, ¿cuál es tu *nombre*?`;
                         await prisma.sesionChat.updateMany({
                             where: { id: remoteJid, negocioId },
                             data: { estado: 'ESPERANDO_NOMBRE' }
@@ -325,13 +333,84 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
 
                     case 'ESPERANDO_NOMBRE': {
                         if (textMessage.trim().length < 3) {
-                            respuesta = 'Por favor, ingresa tu nombre completo (mínimo 3 caracteres).';
+                            respuesta = 'Por favor, ingresa tu nombre (mínimo 3 caracteres).';
                         } else {
                             const nombre = textMessage.trim();
-                            respuesta = `Perfecto, *${nombre}*! 🖊️\n\n¿Qué tatuaje te gustaría hacerte? Descríbelo brevemente.\n\nEj: "Una rosa en estilo realista", "Letras con el nombre de mi mamá", etc.`;
+                            
+                            // Obtener artistas del negocio
+                            const artistas = await getArtistasDelNegocio(negocioId);
+                            
+                            if (artistas.length === 0) {
+                                respuesta = `Mucho gusto, *${nombre}* 🔥\n\nLo sentimos, en este momento no hay artistas disponibles en el estudio. Por favor intenta más tarde.`;
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            } else if (artistas.length === 1) {
+                                // Solo hay un artista, asignarlo automáticamente
+                                const artista = artistas[0];
+                                respuesta = `Mucho gusto, *${nombre}* 🔥\n\nSerás atendido por *${artista.nombre}* 😎\n\nAhora cuéntame: ¿Qué tattoo quieres hacerte? Descríbelo brevemente.\n\nEj: "Una rosa en estilo realista", "Un dragón japonés", etc.`;
+                                await prisma.sesionChat.updateMany({
+                                    where: { id: remoteJid, negocioId },
+                                    data: { 
+                                        estado: 'ESPERANDO_DESCRIPCION', 
+                                        datos: { ...datos, nombre, artistaId: artista.id, artistaNombre: artista.nombre } 
+                                    }
+                                });
+                            } else {
+                                // Mostrar lista de artistas
+                                const listaArtistas = artistas.map((a, i) => `*${i + 1}.* ${a.nombre}`).join('\n');
+                                respuesta = `Mucho gusto, *${nombre}* 🔥\n\nEstos son nuestros artistas disponibles:\n\n${listaArtistas}\n\nEscribe el *número* o *nombre* del artista con el que deseas tatuarte.`;
+                                await prisma.sesionChat.updateMany({
+                                    where: { id: remoteJid, negocioId },
+                                    data: { 
+                                        estado: 'ESPERANDO_ARTISTA', 
+                                        datos: { ...datos, nombre, artistasDisponibles: artistas } 
+                                    }
+                                });
+                            }
+                        }
+                        break;
+                    }
+
+                    case 'ESPERANDO_ARTISTA': {
+                        const artistasDisponibles = datos.artistasDisponibles as { id: number; nombre: string }[];
+                        if (!artistasDisponibles || artistasDisponibles.length === 0) {
+                            respuesta = 'Ocurrió un error. Escribe */start* para reiniciar.';
+                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            break;
+                        }
+
+                        const inputLower = normalizarTexto(textMessage);
+                        let artistaSeleccionado: { id: number; nombre: string } | undefined;
+
+                        // Intentar por número
+                        const numero = parseInt(textMessage.trim());
+                        if (!isNaN(numero) && numero >= 1 && numero <= artistasDisponibles.length) {
+                            artistaSeleccionado = artistasDisponibles[numero - 1];
+                        }
+
+                        // Intentar por nombre (coincidencia parcial)
+                        if (!artistaSeleccionado) {
+                            artistaSeleccionado = artistasDisponibles.find(a => 
+                                normalizarTexto(a.nombre).includes(inputLower) || 
+                                inputLower.includes(normalizarTexto(a.nombre))
+                            );
+                        }
+
+                        if (!artistaSeleccionado) {
+                            const listaArtistas = artistasDisponibles.map((a, i) => `*${i + 1}.* ${a.nombre}`).join('\n');
+                            respuesta = `No encontré ese artista. Por favor elige uno de la lista:\n\n${listaArtistas}\n\nEscribe el *número* o *nombre*.`;
+                        } else {
+                            respuesta = `Excelente elección, *${artistaSeleccionado.nombre}* 😎\n\nAhora cuéntame: ¿Qué tattoo quieres hacerte? Descríbelo brevemente.\n\nEj: "Una rosa en estilo realista", "Un dragón japonés", etc.`;
+                            // Limpiamos artistasDisponibles del JSON para que no ocupe espacio
                             await prisma.sesionChat.updateMany({
                                 where: { id: remoteJid, negocioId },
-                                data: { estado: 'ESPERANDO_DESCRIPCION', datos: { ...datos, nombre } }
+                                data: { 
+                                    estado: 'ESPERANDO_DESCRIPCION', 
+                                    datos: { 
+                                        nombre: datos.nombre, 
+                                        artistaId: artistaSeleccionado.id, 
+                                        artistaNombre: artistaSeleccionado.nombre 
+                                    } 
+                                }
                             });
                         }
                         break;
@@ -342,52 +421,23 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             respuesta = 'Por favor, describe un poco más el tatuaje que deseas.';
                         } else {
                             const descripcion = textMessage.trim();
-                            respuesta = `Genial! 📏\n\n¿De qué *tamaño* lo quieres?\n\n- *Chico* (5-10 cm)\n- *Mediano* (10-20 cm)\n- *Grande* (más de 20 cm)\n\nTambién puedes decirnos las medidas exactas, ej: "15 cm"`;
+                            respuesta = `Perfecto 📸\n\nAhora envíame una *imagen de referencia* del tattoo que deseas.\n\n- Si la tienes, *envíala ahora*\n- Si no, escribe *"no"*`;
                             await prisma.sesionChat.updateMany({
                                 where: { id: remoteJid, negocioId },
-                                data: { estado: 'ESPERANDO_TAMANIO', datos: { ...datos, descripcionTattoo: descripcion } }
-                            });
-                        }
-                        break;
-                    }
-
-                    case 'ESPERANDO_TAMANIO': {
-                        const tamanioNormalizado = extraerTamanioTattoo(textMessage);
-                        if (!tamanioNormalizado) {
-                            respuesta = 'Para el tamaño necesito *dos medidas*.\n\nEnvíalo así:\n- *10 x 10 cm*\n- *5x5 cm*\n- *7.5 x 12 cm*';
-                        } else {
-                            respuesta = `Perfecto! 💪\n\n¿En qué *zona del cuerpo* te lo quieres hacer?\n\nEj: "brazo derecho", "espalda", "tobillo", "antebrazo", etc.`;
-                            await prisma.sesionChat.updateMany({
-                                where: { id: remoteJid, negocioId },
-                                data: { estado: 'ESPERANDO_ZONA', datos: { ...datos, tamanio: tamanioNormalizado } }
-                            });
-                        }
-                        break;
-                    }
-
-                    case 'ESPERANDO_ZONA': {
-                        const zona = textMessage.trim();
-                        if (zona.length < 2) {
-                            respuesta = 'Por favor, indica la zona del cuerpo. Ej: brazo, espalda, pierna, etc.';
-                        } else {
-                            respuesta = `Excelente! 📸\n\n¿Tienes alguna *foto de referencia* del tatuaje que quieres?\n\n- Si la tienes, *envíala ahora*\n- Si no, escribe *"no"*`;
-                            await prisma.sesionChat.updateMany({
-                                where: { id: remoteJid, negocioId },
-                                data: { estado: 'ESPERANDO_FOTO', datos: { ...datos, zona } }
+                                data: { estado: 'ESPERANDO_FOTO', datos: { ...datos, descripcionTattoo: descripcion } }
                             });
                         }
                         break;
                     }
 
                     case 'ESPERANDO_FOTO': {
-                        // Candado atómico: evitamos la condición de carrera si envían 2 fotos al mismo tiempo.
+                        // Candado atómico
                         const lock = await prisma.sesionChat.updateMany({
                             where: { id: remoteJid, negocioId, estado: 'ESPERANDO_FOTO' },
                             data: { estado: 'PROCESANDO_SOLICITUD' }
                         });
                         
                         if (lock.count === 0) {
-                            // Otra foto ya se está procesando o el estado cambió. Ignoramos este mensaje.
                             console.log(`[Bot:${negocioId}] Candado activado: ignorando imagen duplicada de ${remoteJid}`);
                             continue;
                         }
@@ -407,61 +457,91 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             } catch (uploadError) {
                                 console.error(`[Bot:${negocioId}] Error subiendo foto:`, uploadError);
                                 respuesta = '❌ Hubo un error al subir la foto. Intenta enviarla de nuevo o escribe *"no"* para continuar sin foto.';
-                                // Liberar el candado si falla
                                 await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FOTO' } });
                                 break;
                             }
                         } else if (!noTieneFoto) {
                             respuesta = '📸 Por favor envía una *imagen* de referencia o escribe *"no"* si no tienes una.';
-                            // Liberar el candado porque no era imagen válida ni 'no'
                             await prisma.sesionChat.updateMany({ where: { id: remoteJid, negocioId }, data: { estado: 'ESPERANDO_FOTO' } });
                             break;
                         }
 
-                        // --- Create Cliente + Solicitud ---
-                        const telefonoCliente = obtenerTelefonoCliente(msg, remoteJid, negocioId);
-                        const datosFinales = sesion.datos as any;
+                        respuesta = `${fotoUrl ? 'Imagen recibida ✅' : 'Entendido, sin foto de referencia.'}\n\nAhora indícame el *tamaño aproximado* del tattoo.\n\nEjemplos:\n- *5x5 cm*\n- *10x15 cm*\n- *20x12 cm*`;
+                        await prisma.sesionChat.updateMany({
+                            where: { id: remoteJid, negocioId },
+                            data: { estado: 'ESPERANDO_TAMANIO', datos: { ...datos, fotoReferenciaUrl: fotoUrl } }
+                        });
+                        break;
+                    }
 
-                        if (!telefonoCliente) {
-                            respuesta = '⚠️ No pude obtener tu número de WhatsApp correctamente. Escribe */start* para reiniciar o intenta de nuevo en unos segundos.';
-                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
-                            break;
+                    case 'ESPERANDO_TAMANIO': {
+                        const tamanioNormalizado = extraerTamanioTattoo(textMessage);
+                        if (!tamanioNormalizado) {
+                            respuesta = 'Para el tamaño necesito *dos medidas*.\n\nEnvíalo así:\n- *10 x 10 cm*\n- *5x5 cm*\n- *7.5 x 12 cm*';
+                        } else {
+                            respuesta = '¡Casi listos! 🙌\n\nPor último, ¿en qué *zona del cuerpo* te gustaría hacerte el tatuaje?\n\nEj: Antebrazo, pierna, espalda, pecho...';
+                            await prisma.sesionChat.updateMany({
+                                where: { id: remoteJid, negocioId },
+                                data: { estado: 'ESPERANDO_ZONA', datos: { ...datos, tamanio: tamanioNormalizado } }
+                            });
                         }
+                        break;
+                    }
 
-                        try {
-                            const cliente = await prisma.cliente.upsert({
-                                where: { numeroWhatsapp: telefonoCliente },
-                                update: { nombre: datosFinales.nombre || 'Cliente' },
-                                create: { negocioId, nombre: datosFinales.nombre || 'Cliente', numeroWhatsapp: telefonoCliente }
-                            });
+                    case 'ESPERANDO_ZONA': {
+                        if (textMessage.trim().length < 3) {
+                            respuesta = 'Por favor, dime una zona del cuerpo válida (ej. brazo, pierna, espalda).';
+                        } else {
+                            const zonaDelCuerpo = textMessage.trim();
+                            // --- Crear Cliente + Solicitud con artista asignado y zona del cuerpo ---
+                            const telefonoCliente = obtenerTelefonoCliente(msg, remoteJid, negocioId);
+                            const datosFinales = { ...datos, zonaDelCuerpo };
 
-                            const solicitud = await prisma.solicitud.create({
-                                data: {
-                                    negocioId,
-                                    clienteId: cliente.id,
+                            if (!telefonoCliente) {
+                                respuesta = '⚠️ No pude obtener tu número de WhatsApp correctamente. Escribe */start* para reiniciar.';
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                                break;
+                            }
+
+                            try {
+                                const cliente = await prisma.cliente.upsert({
+                                    where: { numeroWhatsapp: telefonoCliente },
+                                    update: { nombre: datosFinales.nombre || 'Cliente' },
+                                    create: { negocioId, nombre: datosFinales.nombre || 'Cliente', numeroWhatsapp: telefonoCliente }
+                                });
+
+                                const solicitud = await prisma.solicitud.create({
+                                    data: {
+                                        negocioId,
+                                        clienteId: cliente.id,
+                                        artistaId: datosFinales.artistaId || null,
+                                        tipo: 'tatuaje',
+                                        descripcion: datosFinales.descripcionTattoo || 'Sin descripción',
+                                        tamanoEnCm: datosFinales.tamanio || null,
+                                        fotoReferenciaUrl: datosFinales.fotoReferenciaUrl || null,
+                                        zonaDelCuerpo: datosFinales.zonaDelCuerpo,
+                                    }
+                                });
+
+                                io.emit('nueva-solicitud', {
+                                    id: solicitud.id,
+                                    clienteNombre: cliente.nombre,
+                                    clienteTelefono: telefonoCliente,
                                     tipo: 'tatuaje',
-                                    descripcion: datosFinales.descripcionTattoo || 'Sin descripción',
-                                    tamanoEnCm: datosFinales.tamanio || null,
-                                    zonaDelCuerpo: datosFinales.zona || null,
-                                    fotoReferenciaUrl: fotoUrl,
-                                }
-                            });
+                                    descripcion: solicitud.descripcion,
+                                    artistaNombre: datosFinales.artistaNombre || 'Sin asignar',
+                                    zonaDelCuerpo: datosFinales.zonaDelCuerpo
+                                });
 
-                            io.emit('nueva-solicitud', {
-                                id: solicitud.id,
-                                clienteNombre: cliente.nombre,
-                                clienteTelefono: telefonoCliente,
-                                tipo: 'tatuaje',
-                                descripcion: solicitud.descripcion,
-                            });
+                                const artistaNombre = datosFinales.artistaNombre || 'el estudio';
+                                respuesta = `✅ *¡Solicitud registrada con éxito!*\n\n📋 *Resumen:*\n👤 Nombre: ${datosFinales.nombre}\n🎨 Tattoo: ${datosFinales.descripcionTattoo}\n📏 Tamaño: ${datosFinales.tamanio}\n📍 Zona: ${datosFinales.zonaDelCuerpo}\n📸 Foto: ${datosFinales.fotoReferenciaUrl ? 'Sí' : 'No'}\n📌 Artista: ${artistaNombre}\n\nTu solicitud fue enviada al artista *${artistaNombre}*.\nTe avisaremos cuando la cotización esté lista. ¡Gracias! 🙏`;
 
-                            respuesta = `✅ *¡Solicitud registrada con éxito!*\n\n📋 *Resumen:*\n👤 Nombre: ${datosFinales.nombre}\n📱 ID de Cliente: ${telefonoCliente}\n🎨 Tattoo: ${datosFinales.descripcionTattoo}\n📏 Tamaño: ${datosFinales.tamanio}\n💪 Zona: ${datosFinales.zona}\n📸 Foto: ${fotoUrl ? 'Sí' : 'No'}\n\nNuestro equipo revisará tu solicitud y te contactará pronto. ¡Gracias! 🙏`;
-
-                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
-                        } catch (dbError) {
-                            console.error(`[Bot:${negocioId}] Error creando solicitud:`, dbError);
-                            respuesta = '❌ Hubo un error al registrar tu solicitud. Intenta nuevamente escribiendo el comando de inicio.';
-                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            } catch (dbError) {
+                                console.error(`[Bot:${negocioId}] Error creando solicitud:`, dbError);
+                                respuesta = '❌ Hubo un error al registrar tu solicitud. Intenta nuevamente escribiendo el comando de inicio.';
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            }
                         }
                         break;
                     }
@@ -479,34 +559,36 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                 respuesta = 'No podemos viajar en el tiempo 🕰️😅. Por favor elige una fecha que sea a partir de hoy.';
                             } else {
                                 const horasTatuaje = Number(datos.horasEstimadas) || 1;
-                                const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje);
+                                const artistaIdParaSlots = datos.artistaId as number | undefined;
+                                const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje, artistaIdParaSlots);
+                                const artistaNombre = datos.artistaNombre || 'tu artista';
                                 
                                 if (disponibles.length === 0) {
-                                respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no me quedan horarios que puedan acomodar las ${horasTatuaje} horas que tomará tu tatuaje. 😢\n\n¿Te gustaría intentar con otra fecha?`;
-                            } else {
-                                const listaHorarios = disponibles.map(h => `- *${h}*`).join('\n');
-                                respuesta = `¡Genial! Para el *${formatearFechaAmigable(fechaConsultada)}* tengo los siguientes horarios disponibles:\n\n${listaHorarios}\n\nEscribe la hora que prefieres para confirmar tu cita.`;
-                                
-                                await prisma.sesionChat.updateMany({
-                                    where: { id: remoteJid, negocioId },
-                                    data: { 
-                                        estado: 'ESPERANDO_HORA', 
-                                        datos: { ...datos, fechaSeleccionada: fechaConsultada }
-                                    }
-                                });
+                                    respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no hay horarios disponibles para *${artistaNombre}* que puedan acomodar las ${horasTatuaje} horas de tu sesión. 😢\n\n¿Te gustaría intentar con otra fecha?`;
+                                } else {
+                                    const listaHorarios = disponibles.map(h => `- *${h}*`).join('\n');
+                                    respuesta = `Para el *${formatearFechaAmigable(fechaConsultada)}* tengo la siguiente disponibilidad para *${artistaNombre}*:\n\n${listaHorarios}\n\nElige un horario.`;
+                                    
+                                    await prisma.sesionChat.updateMany({
+                                        where: { id: remoteJid, negocioId },
+                                        data: { 
+                                            estado: 'ESPERANDO_HORA', 
+                                            datos: { ...datos, fechaSeleccionada: fechaConsultada }
+                                        }
+                                    });
+                                }
                             }
                         }
-                    }
-                    break;
+                        break;
                     }
 
                     case 'ESPERANDO_HORA': {
                         const horaElegida = textMessage.trim();
-                        // Validar formato de hora usando una regex simple HH:mm
                         const horaRegex = /^([01]?\d|2[0-3]):?([0-5]\d)$/;
                         const match = horaElegida.match(horaRegex);
                         
                         if (!match) {
+                            // Quizá quiere cambiar la fecha
                             const posibleFecha = parsearFechaNatural(textMessage);
                             if (posibleFecha && posibleFecha.confianza !== 'baja') {
                                 const fechaConsultada = posibleFecha.fecha;
@@ -517,17 +599,19 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                     respuesta = 'No podemos viajar en el tiempo 🕰️😅. Por favor elige una fecha que sea a partir de hoy.';
                                 } else {
                                     const horasTatuaje = Number(datos.horasEstimadas) || 1;
-                                    const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje);
+                                    const artistaIdParaSlots = datos.artistaId as number | undefined;
+                                    const disponibles = await getAvailableSlots(negocioId, fechaConsultada, horasTatuaje, artistaIdParaSlots);
+                                    const artistaNombre = datos.artistaNombre || 'tu artista';
                                     
                                     if (disponibles.length === 0) {
-                                        respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no me quedan horarios que puedan acomodar las ${horasTatuaje} horas que tomará tu tatuaje. 😢\n\n¿Te gustaría intentar con otra fecha?`;
+                                        respuesta = `Lo siento, para el *${formatearFechaAmigable(fechaConsultada)}* no hay horarios disponibles para *${artistaNombre}*. 😢\n\n¿Te gustaría intentar con otra fecha?`;
                                         await prisma.sesionChat.updateMany({
                                             where: { id: remoteJid, negocioId },
                                             data: { estado: 'ESPERANDO_FECHA' }
                                         });
                                     } else {
                                         const listaHorarios = disponibles.map(h => `- *${h}*`).join('\n');
-                                        respuesta = `¡Entendido! Cambiamos al *${formatearFechaAmigable(fechaConsultada)}*. Tengo los siguientes horarios disponibles:\n\n${listaHorarios}\n\nEscribe la hora que prefieres.`;
+                                        respuesta = `¡Entendido! Cambiamos al *${formatearFechaAmigable(fechaConsultada)}*.\n\nDisponibilidad de *${artistaNombre}*:\n\n${listaHorarios}\n\nEscribe la hora que prefieres.`;
                                         
                                         await prisma.sesionChat.updateMany({
                                             where: { id: remoteJid, negocioId },
@@ -547,17 +631,27 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
 
                         let horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
                         
-                        // Doble chequeo de disponibilidad (Race condition prevention)
+                        // Doble chequeo de disponibilidad del ARTISTA
                         const fechaSeleccionada = new Date(datos.fechaSeleccionada);
                         const horasTatuaje = Number(datos.horasEstimadas) || 1;
-                        const disponiblesAhora = await getAvailableSlots(negocioId, fechaSeleccionada, horasTatuaje);
+                        const artistaIdParaValidar = datos.artistaId as number | undefined;
+                        const disponiblesAhora = await getAvailableSlots(negocioId, fechaSeleccionada, horasTatuaje, artistaIdParaValidar);
                         
                         if (!disponiblesAhora.includes(horaFormateada)) {
-                            respuesta = `Uy! Parece que alguien acaba de tomar ese horario o no está disponible. 😅\n\nEstos son los que quedan:\n${disponiblesAhora.map(h => `- *${h}*`).join('\n')}\n\n¿Cuál prefieres?`;
+                            const artistaNombre = datos.artistaNombre || 'tu artista';
+                            if (disponiblesAhora.length === 0) {
+                                respuesta = `¡Ups! Parece que ya no hay horarios disponibles para *${artistaNombre}* en esa fecha. 😅\n\n¿Te gustaría intentar con otra fecha?`;
+                                await prisma.sesionChat.updateMany({
+                                    where: { id: remoteJid, negocioId },
+                                    data: { estado: 'ESPERANDO_FECHA' }
+                                });
+                            } else {
+                                respuesta = `Ese horario ya no está disponible para *${artistaNombre}*. 😅\n\nEstos son los que quedan:\n${disponiblesAhora.map(h => `- *${h}*`).join('\n')}\n\n¿Cuál prefieres?`;
+                            }
                             break;
                         }
 
-                        // Crear la Cita en base de datos
+                        // Crear la Cita en base de datos con el artista asignado
                         try {
                             const inicioCita = new Date(fechaSeleccionada);
                             const [horasStr, minsStr] = horaFormateada.split(':');
@@ -572,6 +666,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                 data: {
                                     negocioId,
                                     clienteId: solicitudRelacionada?.clienteId,
+                                    artistaId: datos.artistaId || solicitudRelacionada?.artistaId || null,
                                     solicitudId: datos.solicitudId,
                                     fechaHoraInicio: inicioCita,
                                     fechaHoraFin: finCita,
@@ -580,10 +675,9 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                 }
                             });
 
-                            // Actualizar la solicitud a estado AGENDADO o similar si existiese.
-                            
                             const horaFinStr = `${finCita.getHours().toString().padStart(2, '0')}:${finCita.getMinutes().toString().padStart(2, '0')}`;
-                            respuesta = `¡Perfecto ${datos.nombre}!\n\nTu cita quedó agendada para *${formatearFechaAmigable(fechaSeleccionada)}* a las *${horaFormateada}*.\nLa sesión finalizará aproximadamente a las *${horaFinStr}*.\n\nTe esperamos en el estudio 🔥`;
+                            const artistaNombre = datos.artistaNombre || 'tu artista';
+                            respuesta = `✅ *¡Cita confirmada!*\n\n📋 *Detalles:*\n👤 Cliente: ${datos.nombre}\n📌 Artista: *${artistaNombre}*\n📅 Fecha: *${formatearFechaAmigable(fechaSeleccionada)}*\n🕐 Hora: *${horaFormateada}* - *${horaFinStr}*\n⏱️ Duración: ${horasTatuaje} horas\n💰 Precio: ${datos.precioCotizado ? `$${datos.precioCotizado}` : 'Por confirmar'}\n\n¡Te esperamos! 🔥`;
 
                             await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
                         } catch (err) {
@@ -599,8 +693,9 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 }
 
                 // Simulación Humana (Anti-Ban)
-                // Calculamos un delay basado en la longitud de la respuesta (aprox 30ms por carácter, max 4s)
-                const delaySimulado = Math.min(Math.max(respuesta.length * 30, 1500), 4000);
+                // Calculamos un delay basado en la longitud de la respuesta + jitter aleatorio
+                const jitter = Math.floor(Math.random() * 1000);
+                const delaySimulado = Math.min(Math.max(respuesta.length * 30, 1500), 5000) + jitter;
                 await new Promise(resolve => setTimeout(resolve, delaySimulado));
 
                 // Send response
@@ -618,9 +713,11 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 }
             } catch (error) {
                 console.error(`[Bot:${negocioId}] Error:`, error);
-                try {
-                    await botInstance.sock.sendMessage(remoteJid, { text: '❌ Error interno. Escribe el comando de inicio para reiniciar.' });
-                } catch {  }
+                if (botInstance.conectado) {
+                    try {
+                        await botInstance.sock.sendMessage(remoteJid, { text: '❌ Error interno. Escribe el comando de inicio para reiniciar.' });
+                    } catch {  }
+                }
             }
         }
     });
@@ -767,7 +864,7 @@ export const solicitarCodigoPairing = async (
         version,
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: ['Ubuntu', 'Chrome', '110.0.5481.177'],
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 10000,
         emitOwnEvents: false,

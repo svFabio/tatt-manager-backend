@@ -1,1 +1,36 @@
-import { Router } from 'express';import { loginConGoogle, loginConEmail, registrarConEmail, me, googleMobileStart, googleMobileCallback, mobileTokenPoll } from '../controllers/auth.controller';import { verificarToken } from '../middleware/auth.middleware';const router = Router();router.post('/google', loginConGoogle);router.post('/register', registrarConEmail);router.post('/login', loginConEmail);router.get('/me', verificarToken, me);router.get('/google-mobile', googleMobileStart);router.get('/mobile-callback', googleMobileCallback);router.get('/mobile-token', mobileTokenPoll);export default router;
+import { Router } from 'express';
+import {
+    loginConGoogle,
+    loginConEmail,
+    registrarConEmail,
+    me,
+    misEstudios,
+    seleccionarEstudio,
+    crearEstudio,
+    unirseAEstudio,
+    googleMobileStart,
+    googleMobileCallback,
+    mobileTokenPoll,
+} from '../controllers/auth.controller';
+import { verificarToken } from '../middleware/auth.middleware';
+
+const router = Router();
+
+// ── Rutas públicas (sin token) ──
+router.post('/google', loginConGoogle);
+router.post('/register', registrarConEmail);
+router.post('/login', loginConEmail);
+
+// ── Google Mobile OAuth ──
+router.get('/google-mobile', googleMobileStart);
+router.get('/mobile-callback', googleMobileCallback);
+router.get('/mobile-token', mobileTokenPoll);
+
+// ── Rutas autenticadas (token básico, sin estudio) ──
+router.get('/me', verificarToken, me);
+router.get('/estudios', verificarToken, misEstudios);
+router.post('/estudios/crear', verificarToken, crearEstudio);
+router.post('/estudios/unirse', verificarToken, unirseAEstudio);
+router.post('/estudios/seleccionar/:negocioId', verificarToken, seleccionarEstudio);
+
+export default router;
