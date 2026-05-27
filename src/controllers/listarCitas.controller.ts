@@ -6,10 +6,12 @@ import * as citasService from '../services/listarCitas.service';
 export const listarSolicitudes = async (req: Request, res: Response) => {
     // Obtenemos el negocioId del middleware de autenticación
     const negocioId = req.negocioId!; 
+    const rol = req.estudioActivo?.rol;
+    const artistaId = rol === 'ARTISTA' ? req.usuario?.id : undefined;
 
     try {
         // Llamamos al servicio que definiste
-        const solicitudes = await citasService.getSolicitudes(negocioId);
+        const solicitudes = await citasService.getSolicitudes(negocioId, artistaId);
 
         // Si la lista está vacía, igual devolvemos 200 con un array vacío
         return res.status(200).json({
@@ -32,12 +34,15 @@ export const listarSolicitudes = async (req: Request, res: Response) => {
 export const listarCitasPorEstado = async (req: Request, res: Response) => {
     const negocioId = req.negocioId!;
     const { estado } = req.query; 
+    const rol = req.estudioActivo?.rol;
+    const artistaId = rol === 'ARTISTA' ? req.usuario?.id : undefined;
 
     try {
         // Casteamos el string de la query al Enum de Prisma
         const citas = await citasService.getCitasByEstado(
             negocioId, 
-            estado as EstadoCita
+            estado as EstadoCita,
+            artistaId
         );
         return res.status(200).json({ ok: true, data: citas });
     } catch (error: any) {

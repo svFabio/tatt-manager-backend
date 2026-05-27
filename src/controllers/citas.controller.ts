@@ -3,7 +3,9 @@ import { CitasService } from '../services/citas.service';
 
 export const getPendientes = async (req: Request, res: Response) => {
   try {
-    const citas = await CitasService.getPendientes(req.negocioId!);
+    const rol = req.estudioActivo?.rol;
+    const artistaId = rol === 'ARTISTA' ? req.usuario?.id : undefined;
+    const citas = await CitasService.getPendientes(req.negocioId!, artistaId);
     res.json(citas);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error obteniendo citas' });
@@ -27,7 +29,9 @@ export const validarCita = async (req: Request, res: Response) => {
 export const getAgenda = async (req: Request, res: Response) => {
   try {
     const { desde, hasta } = req.query;
-    const citas = await CitasService.getAgenda(req.negocioId!, desde as string, hasta as string);
+    const rol = req.estudioActivo?.rol;
+    const artistaId = rol === 'ARTISTA' ? req.usuario?.id : undefined;
+    const citas = await CitasService.getAgenda(req.negocioId!, desde as string, hasta as string, artistaId);
     res.json(citas);
   } catch (error) {
     console.error('Error en getAgenda:', error);
