@@ -7,10 +7,90 @@ import { JWT_EXPIRES_IN } from '../config';
 const JWT_SECRET = process.env.JWT_SECRET!;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-export const mobileTokenStore = new Map<string, { data: any; expiry: number }>();
+/* ─── Tipos ────────────────────────────────────────────────────────── */
+
+export interface SessionData {
+    token: string;
+    userId: number;
+    userName: string;
+    userEmail: string;
+    userRol: string;
+    negocioId: number;
+    negocioNombre: string;
+    negocioPlan: string;
+}
+
+export const mobileTokenStore = new Map<string, { data: SessionData; expiry: number }>();
+
+/* ─── Helper: generar token básico (solo identidad, SIN estudio) ──── */
+
+function generarTokenBasico(usuario: { id: number; email: string }) {
+    return jwt.sign(
+        { id: usuario.id, email: usuario.email },
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
+    );
+}
+
+/* ─── Helper: generar token contextual (identidad + estudio + rol) ── */
+
+function generarTokenContextual(
+    usuario: { id: number; email: string },
+    negocioId: number,
+    rol: string
+) {
+    return jwt.sign(
+        { id: usuario.id, email: usuario.email, negocioId, rol },
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
+    );
+}
+
+/* ─── Servicio de Autenticación ──────────────────────────────────── */
 
 export class AuthService {
-    static async handleGoogleLogin(googleToken: string, rawUserInfo: any) {
+
+    /* ── Registro con email (solo crea usuario, SIN estudio) ────── */
+    static async registrarConEmail(email: string, password: string, nombre?: string) {
+        const existente = await prisma.usuario.findUnique({ where: { email } });
+        if (existente) throw { status: 409, message: 'Ya existe una cuenta con ese email' };
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const usuario = await prisma.usuario.create({
+            data: {
+                nombre: nombre || email.split('@')[0],
+                email,
+                password: hashedPassword,
+                authProvider: 'email',
+            },
+        });
+
+        const token = generarTokenBasico(usuario);
+        return {
+            token,
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
+            esNuevo: true,
+        };
+    }
+
+    /* ── Login con email ───────────────────────────────────────── */
+    static async loginConEmail(email: string, password: string) {
+        const usuario = await prisma.usuario.findUnique({ where: { email } });
+        if (!usuario || !usuario.password) throw { status: 401, message: 'Credenciales incorrectas' };
+
+        const passwordValido = await bcrypt.compare(password, usuario.password);
+        if (!passwordValido) throw { status: 401, message: 'Credenciales incorrectas' };
+
+        const token = generarTokenBasico(usuario);
+        return {
+            token,
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
+            esNuevo: false,
+        };
+    }
+
+    /* ── Login con Google (via access_token) ────────────────────── */
+    static async handleGoogleLogin(googleToken: string, rawUserInfo: Record<string, unknown> | null) {
         let googleId: string;
         let email: string;
         let nombre: string;
@@ -36,108 +116,139 @@ export class AuthService {
             nombre = payload.name || email.split('@')[0];
         }
 
-        let negocio = await prisma.negocio.findUnique({ where: { googleId } });
-        const esNuevo = !negocio;
-        if (!negocio) {
-            negocio = await prisma.negocio.create({
-                data: {
-                    googleId,
-                    email,
-                    nombre,
-                    usuarios: { create: { nombre, email, googleId, rol: 'ADMIN' } },
-                },
-            });
+        // Buscar o crear usuario
+        let usuario = await prisma.usuario.findUnique({ where: { googleId } });
+        const esNuevo = !usuario;
+        if (!usuario) {
+            // También verificar por email
+            usuario = await prisma.usuario.findUnique({ where: { email } });
+            if (usuario) {
+                // Vincular googleId al usuario existente
+                usuario = await prisma.usuario.update({
+                    where: { id: usuario.id },
+                    data: { googleId, authProvider: 'google' },
+                });
+            } else {
+                usuario = await prisma.usuario.create({
+                    data: { nombre, email, googleId, authProvider: 'google' },
+                });
+            }
         }
-        const usuario = await prisma.usuario.findFirst({ where: { negocioId: negocio.id, googleId } });
-        if (!usuario) throw { status: 500, message: 'Error recuperando el usuario del negocio' };
 
-        const token = jwt.sign(
-            { id: usuario.id, email: usuario.email, rol: usuario.rol, negocioId: negocio.id },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
+        const token = generarTokenBasico(usuario);
         return {
             token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol },
-            negocio: { id: negocio.id, nombre: negocio.nombre, plan: negocio.plan },
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
             esNuevo,
         };
     }
 
-    static async getMe(userId: number, negocioId: number) {
+    /* ── /me endpoint ──────────────────────────────────────────── */
+    static async getMe(userId: number) {
         const usuario = await prisma.usuario.findUnique({
             where: { id: userId },
-            select: { id: true, nombre: true, email: true, rol: true },
+            select: { id: true, nombre: true, email: true, authProvider: true },
         });
-        const negocio = await prisma.negocio.findUnique({
-            where: { id: negocioId },
-            select: { id: true, nombre: true, plan: true },
-        });
-        if (!usuario || !negocio) throw { status: 404, message: 'Usuario o negocio no encontrado' };
-        return { ...usuario, negocio };
+        if (!usuario) throw { status: 404, message: 'Usuario no encontrado' };
+        return usuario;
     }
 
-    static async registrarConEmail(email: string, password: string) {
-        const existente = await prisma.usuario.findUnique({ where: { email } });
-        if (existente) throw { status: 409, message: 'Ya existe una cuenta con ese email' };
+    /* ── Listar estudios del usuario ───────────────────────────── */
+    static async getEstudiosUsuario(userId: number) {
+        const membresías = await prisma.miembroEstudio.findMany({
+            where: { usuarioId: userId },
+            include: {
+                negocio: {
+                    select: { id: true, nombre: true, plan: true },
+                },
+            },
+            orderBy: { unidoEn: 'desc' },
+        });
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        return membresías.map((m) => ({
+            negocioId: m.negocio.id,
+            nombre: m.negocio.nombre,
+            plan: m.negocio.plan,
+            rol: m.rol,
+            unidoEn: m.unidoEn,
+        }));
+    }
+
+    /* ── Seleccionar estudio (generar token contextual) ─────────── */
+    static async seleccionarEstudio(userId: number, negocioId: number) {
+        const miembro = await prisma.miembroEstudio.findUnique({
+            where: { usuarioId_negocioId: { usuarioId: userId, negocioId } },
+            include: {
+                negocio: { select: { id: true, nombre: true, plan: true } },
+                usuario: { select: { id: true, nombre: true, email: true } },
+            },
+        });
+        if (!miembro) throw { status: 403, message: 'No perteneces a este estudio' };
+
+        const token = generarTokenContextual(miembro.usuario, negocioId, miembro.rol);
+        return {
+            token,
+            usuario: { id: miembro.usuario.id, nombre: miembro.usuario.nombre, email: miembro.usuario.email },
+            negocio: miembro.negocio,
+            rol: miembro.rol,
+        };
+    }
+
+    /* ── Crear estudio (usuario se vuelve ADMIN) ───────────────── */
+    static async crearEstudio(userId: number, nombreEstudio: string) {
+        const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        const seg = () => Array.from({ length: 4 }, () => CHARS[Math.floor(Math.random() * CHARS.length)]).join('');
+        const codigoInvitacion = `TATT-${seg()}-${seg()}-${seg()}-${seg()}`;
+
         const negocio = await prisma.negocio.create({
             data: {
-                googleId: `email-${email}`, 
-                email,
-                nombre: 'Mi Negocio',
-                usuarios: {
-                    create: { nombre: email.split('@')[0], email, password: hashedPassword, rol: 'ADMIN' },
+                nombre: nombreEstudio,
+                codigoInvitacion,
+                miembros: {
+                    create: { usuarioId: userId, rol: 'ADMIN' },
                 },
             },
         });
-        const usuario = await prisma.usuario.findFirst({ where: { negocioId: negocio.id, email } });
-        if (!usuario) throw { status: 500, message: 'Error creando el usuario' };
 
-        const token = jwt.sign(
-            { id: usuario.id, email: usuario.email, rol: usuario.rol, negocioId: negocio.id },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
         return {
-            token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol },
-            negocio: { id: negocio.id, nombre: negocio.nombre, plan: negocio.plan },
-            esNuevo: true,
+            negocioId: negocio.id,
+            nombre: negocio.nombre,
+            plan: negocio.plan,
+            rol: 'ADMIN' as const,
+            codigoInvitacion,
         };
     }
 
-    static async loginConEmail(email: string, password: string) {
-        const usuario = await prisma.usuario.findUnique({ where: { email } });
-        if (!usuario || !usuario.password) throw { status: 401, message: 'Credenciales incorrectas' };
-
-        const passwordValido = await bcrypt.compare(password, usuario.password);
-        if (!passwordValido) throw { status: 401, message: 'Credenciales incorrectas' };
-
+    /* ── Unirse a estudio por código ───────────────────────────── */
+    static async unirseAEstudio(userId: number, codigo: string) {
         const negocio = await prisma.negocio.findUnique({
-            where: { id: usuario.negocioId },
-            select: { id: true, nombre: true, plan: true },
+            where: { codigoInvitacion: codigo },
         });
-        if (!negocio) throw { status: 404, message: 'Negocio no encontrado' };
+        if (!negocio) throw { status: 404, message: 'Código de invitación inválido' };
 
-        const token = jwt.sign(
-            { id: usuario.id, email: usuario.email, rol: usuario.rol, negocioId: negocio.id },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
+        // Verificar si ya es miembro
+        const existente = await prisma.miembroEstudio.findUnique({
+            where: { usuarioId_negocioId: { usuarioId: userId, negocioId: negocio.id } },
+        });
+        if (existente) throw { status: 409, message: 'Ya eres miembro de este estudio' };
+
+        await prisma.miembroEstudio.create({
+            data: { usuarioId: userId, negocioId: negocio.id, rol: 'ARTISTA' },
+        });
+
         return {
-            token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol },
-            negocio,
-            esNuevo: false,
+            negocioId: negocio.id,
+            nombre: negocio.nombre,
+            plan: negocio.plan,
+            rol: 'ARTISTA' as const,
         };
     }
 
-    static async handleGoogleMobileCallback(code: string, state: any) {
+    /* ── Google Mobile OAuth (flujo redirect) ─────────────────── */
+    static async handleGoogleMobileCallback(code: string, state: string) {
         const backendUrl = process.env.BACKEND_URL;
         if (!backendUrl) throw { status: 500, message: 'Variable de entorno BACKEND_URL no configurada.' };
-        
+
         const redirectUri = `${backendUrl}/api/auth/mobile-callback`;
         const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
             method: 'POST',
@@ -150,49 +261,52 @@ export class AuthService {
                 grant_type: 'authorization_code',
             }),
         });
-        
-        const tokens = await tokenRes.json() as any;
+
+        const tokens = await tokenRes.json() as { access_token?: string };
         if (!tokens.access_token) throw { status: 401, message: 'No se pudo obtener el token de Google' };
 
         const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
             headers: { Authorization: `Bearer ${tokens.access_token}` },
         });
-        const userInfo = await userInfoRes.json() as any;
+        const userInfo = await userInfoRes.json() as { sub: string; email: string; name?: string };
         const { sub: googleId, email, name } = userInfo;
 
-        let negocio = await prisma.negocio.findUnique({ where: { googleId } });
-        if (!negocio) {
-            negocio = await prisma.negocio.create({
-                data: {
-                    googleId, email, nombre: name || email.split('@')[0],
-                    usuarios: { create: { nombre: name || email.split('@')[0], email, googleId, rol: 'ADMIN' } },
-                },
-            });
+        // Buscar o crear usuario
+        let usuario = await prisma.usuario.findUnique({ where: { googleId } });
+        if (!usuario) {
+            usuario = await prisma.usuario.findUnique({ where: { email } });
+            if (usuario) {
+                usuario = await prisma.usuario.update({
+                    where: { id: usuario.id },
+                    data: { googleId, authProvider: 'google' },
+                });
+            } else {
+                usuario = await prisma.usuario.create({
+                    data: { nombre: name || email.split('@')[0], email, googleId, authProvider: 'google' },
+                });
+            }
         }
-        const usuario = await prisma.usuario.findFirst({ where: { negocioId: negocio.id } });
-        if (!usuario) throw { status: 404, message: 'Usuario no encontrado' };
 
-        const jwtToken = jwt.sign(
-            { id: usuario.id, email: usuario.email, rol: usuario.rol, negocioId: negocio.id },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
+        const jwtToken = generarTokenBasico(usuario);
 
-        const sessionData = {
+        const sessionData: SessionData = {
             token: jwtToken,
-            userId: usuario.id, userName: usuario.nombre,
-            userEmail: usuario.email, userRol: usuario.rol,
-            negocioId: negocio.id, negocioNombre: negocio.nombre,
-            negocioPlan: negocio.plan,
+            userId: usuario.id,
+            userName: usuario.nombre,
+            userEmail: usuario.email,
+            userRol: '', // sin rol global
+            negocioId: 0, // sin negocio preseleccionado
+            negocioNombre: '',
+            negocioPlan: '',
         };
 
         if (state) {
             mobileTokenStore.set(state as string, {
                 data: sessionData,
-                expiry: Date.now() + 5 * 60 * 1000, 
+                expiry: Date.now() + 5 * 60 * 1000,
             });
         }
 
-        return { usuario, negocio };
+        return { usuario };
     }
 }

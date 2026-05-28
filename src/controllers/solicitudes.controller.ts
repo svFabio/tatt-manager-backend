@@ -4,10 +4,16 @@ import { enviarMensaje } from '../services/whatsappClient';
 export const getSolicitudes = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { estado } = req.query;
+  const rol = req.estudioActivo?.rol;
+  const usuarioId = req.usuario?.id;
   try {
     const where: any = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
       where.estado = estado as string;
+    }
+    // ARTISTA solo ve solicitudes asignadas a él
+    if (rol === 'ARTISTA' && usuarioId) {
+      where.artistaId = usuarioId;
     }
     const solicitudes = await prisma.solicitud.findMany({
       where,
@@ -51,7 +57,7 @@ export const getSolicitudById = async (req: Request, res: Response) => {
 export const cotizarSolicitud = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { id } = req.params;
-  const { precioCotizado, horasEstimadas, seniaRequerida, artistaId } = req.body;
+  const { precioCotizado, horasEstimadas, seniaRequerida, artistaId, mensajePersonalizado } = req.body;
   try {
     if (precioCotizado === undefined || precioCotizado === null) {
       return res.status(400).json({ data: null, error: 'precioCotizado es requerido' });
@@ -70,7 +76,7 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
     }
     if (artistaId) {
       const artista = await prisma.usuario.findFirst({
-        where: { id: artistaId, negocioId },
+        where: { id: artistaId, membresias: { some: { negocioId } } },
       });
       if (!artista) {
         return res.status(404).json({ data: null, error: 'Artista no encontrado en este negocio' });
@@ -82,8 +88,8 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
         estado: 'COTIZADA',
         precioCotizado,
         horasEstimadas,
-        seniaRequerida: seniaRequerida || null,
-        artistaId: artistaId || null,
+        seniaRequerida: seniaRequerida !== undefined ? seniaRequerida : solicitud.seniaRequerida,
+        artistaId: artistaId !== undefined ? artistaId : solicitud.artistaId,
         cotizadaEn: new Date(),
       },
       include: {
@@ -107,7 +113,11 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
 
-      const mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n\n¿Para qué fecha te gustaría agendar tu cita? (Ej. "mañana", "el próximo viernes", "20 de mayo")`;
+      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
+      if (mensajePersonalizado) {
+        mensaje += `\n💬 *Mensaje del estudio:* ${mensajePersonalizado}\n`;
+      }
+      mensaje += `\n¿Para qué fecha te gustaría agendar tu cita? (Ej. "mañana", "el próximo viernes", "20 de mayo")`;
       mensajeWhatsAppEnviado = await enviarMensaje(negocioId, jid, mensaje);
 
       if (mensajeWhatsAppEnviado) {
@@ -115,7 +125,9 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
           solicitudId: solicitudActualizada.id,
           horasEstimadas: horasEstimadas,
           nombre: solicitudActualizada.cliente.nombre,
-          precioCotizado: precioCotizado
+          precioCotizado: precioCotizado,
+          artistaId: solicitudActualizada.artistaId,
+          artistaNombre: solicitudActualizada.artista?.nombre || 'el artista asignado'
         };
 
         const sesionExistente = await prisma.sesionChat.findUnique({ where: { id: jid } });

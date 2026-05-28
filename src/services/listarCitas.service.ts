@@ -2,20 +2,26 @@ import { EstadoCita } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 // FUNCION PARA OBTENER SOLICITUDES CON ESTADO PENDIENTE, CONFIRMADA, CANCELADA O NO_ASISTIO
-export const getSolicitudes = async (negocioId: number) => {
+export const getSolicitudes = async (negocioId: number, artistaId?: number) => {
     try {
-        const lista = await prisma.cita.findMany({
-            where: {
-                negocioId: negocioId,
-                estadoCita: {
-                    in: [
-                        EstadoCita.PENDIENTE,
-                        EstadoCita.CONFIRMADA,
-                        EstadoCita.FINALIZADA,
-                        EstadoCita.CANCELADA
-                    ],
-                },
+        const whereClause: any = {
+            negocioId: negocioId,
+            estadoCita: {
+                in: [
+                    EstadoCita.PENDIENTE,
+                    EstadoCita.CONFIRMADA,
+                    EstadoCita.FINALIZADA,
+                    EstadoCita.CANCELADA
+                ],
             },
+        };
+
+        if (artistaId) {
+            whereClause.artistaId = artistaId;
+        }
+
+        const lista = await prisma.cita.findMany({
+            where: whereClause,
             orderBy: { creadoEn: 'desc' },
             include: {
                 solicitud: true,
@@ -33,6 +39,7 @@ export const getSolicitudes = async (negocioId: number) => {
             artistaNombre: cita.artista?.nombre || 'Desconocido',
             recibido: cita.creadoEn,
             estado: cita.estadoCita,
+            zonaDelCuerpo: cita.zonaDelCuerpo || cita.solicitud?.zonaDelCuerpo || 'No especificada',
         }));
         return solicitudesFormateadas;
 
@@ -43,20 +50,26 @@ export const getSolicitudes = async (negocioId: number) => {
 };
 
 //FUNCION PARA OBTNER LAS CITAS DE UN ESTADO ESPECIFICO
-export const getCitasByEstado = async (negocioId: number, estado?: EstadoCita) => {
+export const getCitasByEstado = async (negocioId: number, estado?: EstadoCita, artistaId?: number) => {
     try {
-        const citas = await prisma.cita.findMany({
-            where: {
-                negocioId: negocioId,
-                estadoCita: estado ? estado : {
-                    in: [
-                        EstadoCita.PENDIENTE,
-                        EstadoCita.CONFIRMADA,
-                        EstadoCita.FINALIZADA,
-                        EstadoCita.CANCELADA,
-                    ],
-                },
+        const whereClause: any = {
+            negocioId: negocioId,
+            estadoCita: estado ? estado : {
+                in: [
+                    EstadoCita.PENDIENTE,
+                    EstadoCita.CONFIRMADA,
+                    EstadoCita.FINALIZADA,
+                    EstadoCita.CANCELADA,
+                ],
             },
+        };
+
+        if (artistaId) {
+            whereClause.artistaId = artistaId;
+        }
+
+        const citas = await prisma.cita.findMany({
+            where: whereClause,
             orderBy: { creadoEn: 'desc' },
             include: {
                 negocio: true,
@@ -72,6 +85,7 @@ export const getCitasByEstado = async (negocioId: number, estado?: EstadoCita) =
             artistaNombre: cita.artista?.nombre || 'Desconocido',
             recibido: cita.creadoEn,
             estado: cita.estadoCita,
+            zonaDelCuerpo: cita.zonaDelCuerpo || cita.solicitud?.zonaDelCuerpo || 'No especificada',
         }));
         return citasFormateadas;
 

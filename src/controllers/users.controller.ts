@@ -5,12 +5,24 @@ import bcrypt from 'bcryptjs';
 export const getAllUsers = async (req: Request, res: Response) => {
     const negocioId = req.negocioId!;
     try {
-        const usuarios = await prisma.usuario.findMany({
+        const miembros = await prisma.miembroEstudio.findMany({
             where: { negocioId },
-            select: { id: true, nombre: true, email: true, rol: true, creadoEn: true },
-            orderBy: { creadoEn: 'desc' }
+            include: {
+                usuario: { select: { id: true, nombre: true, email: true, creadoEn: true } }
+            },
+            orderBy: { unidoEn: 'desc' }
         });
-        res.json(usuarios);
+        
+        const usuariosFormateados = miembros.map(m => ({
+            id: m.usuario.id,
+            nombre: m.usuario.nombre,
+            email: m.usuario.email,
+            rol: m.rol,
+            creadoEn: m.usuario.creadoEn,
+            unidoEn: m.unidoEn
+        }));
+        
+        res.json(usuariosFormateados);
     } catch (error) {
         console.error('Error obteniendo usuarios:', error);
         res.status(500).json({ error: 'Error al obtener usuarios' });
@@ -27,16 +39,35 @@ export const createUser = async (req: Request, res: Response) => {
         if (rol && !['ADMIN', 'ARTISTA'].includes(rol)) {
             return res.status(400).json({ error: 'Rol inválido. Debe ser ADMIN o ARTISTA' });
         }
-        const existente = await prisma.usuario.findUnique({ where: { email } });
-        if (existente) {
-            return res.status(409).json({ error: 'El email ya está registrado' });
+        
+        let usuario = await prisma.usuario.findUnique({ where: { email } });
+        if (!usuario) {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            usuario = await prisma.usuario.create({
+                data: { nombre, email, password: hashedPassword }
+            });
         }
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const nuevoUsuario = await prisma.usuario.create({
-            data: { negocioId, nombre, email, password: hashedPassword, rol: rol || 'ARTISTA' },
-            select: { id: true, nombre: true, email: true, rol: true, creadoEn: true }
+        
+        const miembroExistente = await prisma.miembroEstudio.findUnique({
+            where: { usuarioId_negocioId: { usuarioId: usuario.id, negocioId } }
         });
-        res.status(201).json(nuevoUsuario);
+        
+        if (miembroExistente) {
+             return res.status(409).json({ error: 'El usuario ya es miembro de este estudio' });
+        }
+
+        const nuevoMiembro = await prisma.miembroEstudio.create({
+            data: { usuarioId: usuario.id, negocioId, rol: rol || 'ARTISTA' },
+            include: { usuario: { select: { id: true, nombre: true, email: true, creadoEn: true } } }
+        });
+        
+        res.status(201).json({
+            id: nuevoMiembro.usuario.id,
+            nombre: nuevoMiembro.usuario.nombre,
+            email: nuevoMiembro.usuario.email,
+            rol: nuevoMiembro.rol,
+            creadoEn: nuevoMiembro.usuario.creadoEn
+        });
     } catch (error) {
         console.error('Error creando usuario:', error);
         res.status(500).json({ error: 'Error al crear usuario' });
@@ -48,22 +79,47 @@ export const updateUser = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { nombre, email, password, rol } = req.body;
-        const usuario = await prisma.usuario.findFirst({ where: { id: parseInt(id), negocioId } });
-        if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
-        const updateData: { nombre?: string; email?: string; password?: string; rol?: 'ADMIN' | 'ARTISTA' } = {};
+        const userId = parseInt(id);
+        
+        const miembro = await prisma.miembroEstudio.findUnique({ 
+            where: { usuarioId_negocioId: { usuarioId: userId, negocioId } },
+            include: { usuario: true }
+        });
+        
+        if (!miembro) return res.status(404).json({ error: 'Usuario no encontrado en este estudio' });
+        
+        const updateData: { nombre?: string; email?: string; password?: string } = {};
         if (nombre) updateData.nombre = nombre;
         if (email) updateData.email = email;
         if (password) updateData.password = await bcrypt.hash(password, 10);
+        
+        if (Object.keys(updateData).length > 0) {
+            await prisma.usuario.update({
+                where: { id: userId },
+                data: updateData
+            });
+        }
+        
         if (rol) {
             if (!['ADMIN', 'ARTISTA'].includes(rol)) return res.status(400).json({ error: 'Rol inválido' });
-            updateData.rol = rol;
+            await prisma.miembroEstudio.update({
+                where: { id: miembro.id },
+                data: { rol }
+            });
         }
-        const usuarioActualizado = await prisma.usuario.update({
-            where: { id: parseInt(id) },
-            data: updateData,
-            select: { id: true, nombre: true, email: true, rol: true, creadoEn: true }
+        
+        const miembroActualizado = await prisma.miembroEstudio.findUnique({
+            where: { id: miembro.id },
+            include: { usuario: { select: { id: true, nombre: true, email: true, creadoEn: true } } }
         });
-        res.json(usuarioActualizado);
+        
+        res.json({
+            id: miembroActualizado!.usuario.id,
+            nombre: miembroActualizado!.usuario.nombre,
+            email: miembroActualizado!.usuario.email,
+            rol: miembroActualizado!.rol,
+            creadoEn: miembroActualizado!.usuario.creadoEn
+        });
     } catch (error) {
         console.error('Error actualizando usuario:', error);
         res.status(500).json({ error: 'Error al actualizar usuario' });
@@ -74,13 +130,20 @@ export const deleteUser = async (req: Request, res: Response) => {
     const negocioId = req.negocioId!;
     try {
         const { id } = req.params;
-        if (req.usuario?.id === parseInt(id)) {
-            return res.status(400).json({ error: 'No puedes eliminar tu propio usuario' });
+        const userId = parseInt(id);
+        
+        if (req.usuario?.id === userId) {
+            return res.status(400).json({ error: 'No puedes eliminar tu propio usuario del estudio' });
         }
-        const usuario = await prisma.usuario.findFirst({ where: { id: parseInt(id), negocioId } });
-        if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
-        await prisma.usuario.delete({ where: { id: parseInt(id) } });
-        res.json({ message: 'Usuario eliminado correctamente' });
+        
+        const miembro = await prisma.miembroEstudio.findUnique({ 
+            where: { usuarioId_negocioId: { usuarioId: userId, negocioId } } 
+        });
+        
+        if (!miembro) return res.status(404).json({ error: 'Usuario no encontrado en este estudio' });
+        
+        await prisma.miembroEstudio.delete({ where: { id: miembro.id } });
+        res.json({ message: 'Usuario removido del estudio correctamente' });
     } catch (error) {
         console.error('Error eliminando usuario:', error);
         res.status(500).json({ error: 'Error al eliminar usuario' });

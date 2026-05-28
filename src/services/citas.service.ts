@@ -2,10 +2,36 @@ import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
 import { getAvailableSlots, getBusinessHours } from './calendarService';
 
+export interface CrearCitaAdminDTO {
+    clienteNombre: string;
+    clienteTelefono: string;
+    fecha: string;
+    horario: string;
+    duracionEnHoras?: number | string;
+    zonaDelCuerpo?: string;
+    tamanoEnCm?: string;
+    cotizacion?: number | string;
+    artistaId?: number;
+}
+
+export interface CrearCitaTatuajeDTO {
+    fechaHoraInicio: string;
+    duracionEnHoras: number | string;
+    tipoCita?: string;
+    artistaId: number;
+    clienteId: number;
+    solicitudId?: number;
+    estiloDeTatuaje?: string;
+    zonaDelCuerpo?: string;
+    seniaPagada?: number;
+}
+
 export class CitasService {
-    static async getPendientes(negocioId: number) {
+    static async getPendientes(negocioId: number, artistaId?: number) {
+        const whereClause: any = { negocioId, estadoCita: 'PENDIENTE' };
+        if (artistaId) whereClause.artistaId = artistaId;
         return await prisma.cita.findMany({
-            where: { negocioId, estadoCita: 'PENDIENTE' },
+            where: whereClause,
             orderBy: { creadoEn: 'desc' },
             include: { cliente: true, solicitud: true }
         });
@@ -55,18 +81,22 @@ export class CitasService {
         return citaActualizada;
     }
 
-    static async getAgenda(negocioId: number, desde?: string, hasta?: string) {
+    static async getAgenda(negocioId: number, desde?: string, hasta?: string, artistaId?: number) {
         const fechaDesde = desde ? new Date(desde) : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
         const fechaHasta = hasta ? new Date(hasta) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         if (hasta) {
             fechaHasta.setUTCHours(23, 59, 59, 999);
         }
+        
+        const whereClause: any = {
+            negocioId,
+            fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
+            estadoCita: { not: 'CANCELADA' }
+        };
+        if (artistaId) whereClause.artistaId = artistaId;
+
         return await prisma.cita.findMany({
-            where: {
-                negocioId,
-                fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
-                estadoCita: { not: 'CANCELADA' }
-            },
+            where: whereClause,
             orderBy: { fechaHoraInicio: 'asc' },
             include: { cliente: true, artista: true }
         });
@@ -94,21 +124,21 @@ export class CitasService {
         return { citasHoy, pendientes, proximasCitas, totalFuturas };
     }
 
-    static async getHorariosDisponibles(negocioId: number, fecha: string, duracionHoras: number = 1) {
+    static async getHorariosDisponibles(negocioId: number, fecha: string, duracionHoras: number = 1, artistaId?: number) {
         const [year, month, day] = fecha.split('-').map(Number);
         const date = new Date(year, month - 1, day);
-        return getAvailableSlots(negocioId, date, duracionHoras);
+        return getAvailableSlots(negocioId, date, duracionHoras, artistaId);
     }
 
-    static async crearCitaAdmin(negocioId: number, data: any) {
-        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion } = data;
+    static async crearCitaAdmin(negocioId: number, data: CrearCitaAdminDTO) {
+        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId } = data;
 
         const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
         if (telefonoLimpio.replace(/[^0-9]/g, '').length < 7) throw { status: 400, message: 'El teléfono debe tener al menos 7 dígitos numéricos.' };
 
         // Validate horario against real available slots
         const duracion = Number(durInput) || 1;
-        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion);
+        const slotsDisponibles = await CitasService.getHorariosDisponibles(negocioId, fecha, duracion, artistaId);
         if (!slotsDisponibles.includes(horario)) {
             throw { status: 400, message: `Horario no disponible. Horarios libres: ${slotsDisponibles.join(', ') || 'ninguno'}` };
         }
@@ -159,6 +189,7 @@ export class CitasService {
                 zonaDelCuerpo: zonaDelCuerpo || null,
                 tamanoEnCm: tamanoEnCm || null,
                 seniaPagada: Number(cotizacion) || 0,
+                artistaId: artistaId || null,
             },
             include: { cliente: true }
         });
@@ -200,7 +231,7 @@ export class CitasService {
 
         return await prisma.cita.update({
             where: { id },
-            data: { estadoCita: nuevoEstado as any }
+            data: { estadoCita: nuevoEstado as import('@prisma/client').EstadoCita }
         });
     }
 
@@ -211,16 +242,16 @@ export class CitasService {
         });
     }
 
-    static async crearCitaTatuaje(negocioId: number, input: any) {
+    static async crearCitaTatuaje(negocioId: number, input: CrearCitaTatuajeDTO) {
         const { fechaHoraInicio, duracionEnHoras: duracionInput, tipoCita = 'tatuaje', artistaId, clienteId, solicitudId, estiloDeTatuaje, zonaDelCuerpo, seniaPagada = 0 } = input;
 
-        const duracionEnHoras = tipoCita === 'consulta' ? 0.5 : parseFloat(duracionInput);
+        const duracionEnHoras = tipoCita === 'consulta' ? 0.5 : parseFloat(String(duracionInput));
         if (!duracionEnHoras || duracionEnHoras <= 0) throw { status: 400, message: 'duracionEnHoras debe ser mayor a 0' };
 
         const inicio = new Date(fechaHoraInicio);
         const fin = new Date(inicio.getTime() + duracionEnHoras * 60 * 60 * 1000);
 
-        const artista = await prisma.usuario.findFirst({ where: { id: artistaId, negocioId } });
+        const artista = await prisma.usuario.findFirst({ where: { id: artistaId, membresias: { some: { negocioId } } } });
         if (!artista) throw { status: 404, message: 'Artista no encontrado en este negocio' };
 
         const cliente = await prisma.cliente.findFirst({ where: { id: clienteId, negocioId } });
@@ -299,7 +330,7 @@ export class CitasService {
 
         return await prisma.cita.update({
             where: { id },
-            data: { estadoCita: estadoFaltante as any },
+            data: { estadoCita: estadoFaltante as import('@prisma/client').EstadoCita },
         });
     }
 

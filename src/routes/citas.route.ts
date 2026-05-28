@@ -13,7 +13,8 @@ import {
     crearCitaTatuaje,
     getDisponibilidad,
     confirmarCita,
-    cancelarCita
+    cancelarCita,
+    getArtistasDisponibles
 } from '../controllers/citas.controller';
 import {
     listarSolicitudes,
@@ -23,15 +24,13 @@ import {
 
 const router = Router();
 
-// TODO AUTH: reemplazar por `verificarToken, tenantMiddleware` cuando se implemente la autenticación.
-const devBypassMiddleware = (req: Request, _res: Response, next: NextFunction) => {
-    const negocioIdQuery = req.query.negocioId;
-    req.negocioId = negocioIdQuery ? parseInt(negocioIdQuery as string, 10) : 1;
-    next();
-};
-router.use(devBypassMiddleware);
+import { verificarToken } from '../middleware/auth.middleware';
+import { tenantMiddleware } from '../middleware/tenant.middleware';
+
+router.use(verificarToken, tenantMiddleware);
 
 router.get('/', getAgenda);
+router.get('/artistas', getArtistasDisponibles);
 router.get('/pendientes', getPendientes);
 router.get('/resumen', getResumen);
 router.get('/horarios-disponibles', getHorariosDisponibles);
