@@ -1,4 +1,3 @@
-
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -101,8 +100,8 @@ app.post('/api/pairing-code', mockTenantMiddleware, async (req, res) => {
 app.use('/api/citas', citasRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/configuracion', configuracionRoutes);
-app.use('/api/statistics', statisticsRoutes);
-app.use('/api/users', usersRoutes);
+app.use('/api/statistics', statisticsRoutes); // 📊 Ruta de Estadísticas activa
+app.use('/api/users', usersRoutes);             // 👤 Ruta de Perfil / Usuarios activa
 app.use('/api/chat', chatRoutes);
 app.use('/api/clientes', clientesRoutes);
 app.use('/api/solicitudes', solicitudesRoutes);
@@ -120,6 +119,6 @@ httpServer.listen(Number(PORT), '0.0.0.0', () => {
     iniciarCronJobs();
     iniciarRecordatorios();
     iniciarSurvey();
-    iniciarWhatsApp(io); // <--- Auto-conecta todos los bots
+    iniciarWhatsApp(io); 
 });
 export default app;
