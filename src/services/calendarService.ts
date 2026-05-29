@@ -32,10 +32,18 @@ const minutesToTime = (totalMinutes: number): string => {
 export const getBusinessHours = async (negocioId: number): Promise<BusinessHours> => {
     try {
         const config = await prisma.configuracion.findUnique({ where: { negocioId } });
-        if (config && config.horarios) {
+        if (config) {
+            // Prioridad: campos dedicados horaApertura/horaCierre
+            if (config.horaApertura && config.horaCierre) {
+                return {
+                    open: config.horaApertura,
+                    close: config.horaCierre,
+                    intervalMinutes: 60,
+                };
+            }
+            // Fallback legacy: formato open/close dentro del JSON horarios
             const horarios = config.horarios as any;
-            // Si tiene formato open/close directo
-            if (horarios.open && horarios.close) {
+            if (horarios?.open && horarios?.close) {
                 return {
                     open: horarios.open,
                     close: horarios.close,
