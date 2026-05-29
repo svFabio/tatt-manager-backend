@@ -1,1 +1,16 @@
-import { Router } from 'express';import { requireAdmin } from '../middleware/permissions.middleware';import { getOverview, getRevenue } from '../controllers/statistics.controller';import { verificarToken } from '../middleware/auth.middleware';import { tenantMiddleware } from '../middleware/tenant.middleware';const router = Router();router.use(verificarToken, tenantMiddleware, requireAdmin);router.get('/overview', getOverview);router.get('/revenue', getRevenue);export default router;
+import { Router } from 'express';
+import { requireAdmin } from '../middleware/permissions.middleware';
+import { getOverview, getRevenue, getEstudioStats } from '../controllers/statistics.controller'; // 👈 Extraídos todos del mismo archivo unificado
+import { verificarToken } from '../middleware/auth.middleware';
+import { tenantMiddleware } from '../middleware/tenant.middleware';
+
+const router = Router();
+
+// Exige token válido, negocio válido y rol de Administrador en el Token
+router.use(verificarToken, tenantMiddleware, requireAdmin);
+
+router.get('/overview', getOverview);
+router.get('/revenue', getRevenue);
+router.get('/estudio', getEstudioStats); // 📊 Endpoint HU-17
+
+export default router;
