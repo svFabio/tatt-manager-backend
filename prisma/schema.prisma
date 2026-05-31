@@ -17,6 +17,7 @@ enum EstadoSolicitud {
   PENDIENTE
   COTIZADA
   RECHAZADA
+  ESPERANDO_COMPROBANTE
 }
 enum EstadoCita {
   PENDIENTE
@@ -60,6 +61,8 @@ model Usuario {
   email         String   @unique
   password      String   @default("")
   googleId      String?  @unique
+  fotoUrl       String?
+  fotoPublicId  String?
   authProvider  String   @default("email")
   creadoEn      DateTime @default(now())
   membresias    MiembroEstudio[]
@@ -86,12 +89,13 @@ model BaileysSession {
   keys  String @db.Text
 }
 model SesionChat {
-  id            String   @id 
+  id            String
   estado        String
   datos         Json
   ultimoMensaje DateTime @default(now())
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  negocioId     Int
+  negocio       Negocio  @relation(fields: [negocioId], references: [id])
+  @@id([id, negocioId])
   @@index([negocioId, ultimoMensaje])
 }
 model Cita {
@@ -158,15 +162,16 @@ model Configuracion {
 model Cliente {
   id             Int      @id @default(autoincrement())
   nombre         String
-  numeroWhatsapp String   @unique
+  numeroWhatsapp String
   creadoEn       DateTime @default(now())
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
-  solicitudes Solicitud[]
-  citas       Cita[]
-  registros   RegistroSesion[]
-  pagos       Pago[]
-  mensajes    MensajeChat[]
+  negocioId      Int
+  negocio        Negocio  @relation(fields: [negocioId], references: [id])
+  solicitudes    Solicitud[]
+  citas          Cita[]
+  registros      RegistroSesion[]
+  pagos          Pago[]
+  mensajes       MensajeChat[]
+  @@unique([numeroWhatsapp, negocioId])
 }
 model Solicitud {
   id                Int             @id @default(autoincrement())
