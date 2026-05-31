@@ -68,7 +68,7 @@ export class AuthService {
         const token = generarTokenBasico(usuario);
         return {
             token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, fotoUrl: usuario.fotoUrl },
             esNuevo: true,
         };
     }
@@ -84,7 +84,7 @@ export class AuthService {
         const token = generarTokenBasico(usuario);
         return {
             token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, fotoUrl: usuario.fotoUrl },
             esNuevo: false,
         };
     }
@@ -138,7 +138,7 @@ export class AuthService {
         const token = generarTokenBasico(usuario);
         return {
             token,
-            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email },
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, fotoUrl: usuario.fotoUrl },
             esNuevo,
         };
     }
@@ -147,7 +147,7 @@ export class AuthService {
     static async getMe(userId: number) {
         const usuario = await prisma.usuario.findUnique({
             where: { id: userId },
-            select: { id: true, nombre: true, email: true, authProvider: true },
+            select: { id: true, nombre: true, email: true, authProvider: true, fotoUrl: true },
         });
         if (!usuario) throw { status: 404, message: 'Usuario no encontrado' };
         return usuario;

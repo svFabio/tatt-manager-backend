@@ -25,9 +25,9 @@ export const getConversaciones = async (req: Request, res: Response) => {
                 (SELECT "direccion" FROM "MensajeChat" m3 
                  WHERE m3."remoteJid" = m1."remoteJid" AND m3."negocioId" = ${negocioId}
                  ORDER BY m3."timestamp" DESC LIMIT 1) as "ultimaDireccion",
-                (SELECT c."clienteNombre" FROM "Cita" c
-                 WHERE c."clienteTelefono" = SPLIT_PART(m1."remoteJid", '@', 1) AND c."negocioId" = ${negocioId}
-                 ORDER BY c."creadoEn" DESC LIMIT 1) as "clienteNombre"
+                (SELECT cl."nombre" FROM "Cliente" cl
+                 WHERE cl."numeroWhatsapp" = SPLIT_PART(m1."remoteJid", '@', 1) AND cl."negocioId" = ${negocioId}
+                 ORDER BY cl."creadoEn" DESC LIMIT 1) as "clienteNombre"
             FROM "MensajeChat" m1
             WHERE m1."negocioId" = ${negocioId}
             GROUP BY "remoteJid"
@@ -89,7 +89,7 @@ export const deleteConversacion = async (req: Request, res: Response) => {
         });
         console.log(`[Chat] 🗑 Conversación eliminada: ${jid} (${count} mensajes) [negocio ${negocioId}]`);
         const io = req.app.get('io');
-        if (io) io.emit('conversacion-eliminada', { remoteJid: jid });
+        if (io) io.to(`negocio-${negocioId}`).emit('conversacion-eliminada', { remoteJid: jid });
         res.json({ success: true, eliminados: count });
     } catch (error) {
         console.error('Error eliminando conversación:', error);

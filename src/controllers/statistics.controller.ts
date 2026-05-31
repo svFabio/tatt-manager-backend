@@ -14,32 +14,43 @@ export const getEstudioStats = async (req: Request, res: Response) => {
     const anioActual = fechaActual.getFullYear();
     const mesActual = fechaActual.getMonth();
 
-    // A. CITAS POR MES
-    const citasDelAnio = await prisma.cita.findMany({
+    // A. SESIONES DE ESTA SEMANA
+    const inicioSemana = new Date(fechaActual);
+    const diaSemana = inicioSemana.getDay(); // 0 = Domingo, 1 = Lunes
+    const diff = inicioSemana.getDate() - diaSemana + (diaSemana === 0 ? -6 : 1); // Ajustar al Lunes
+    inicioSemana.setDate(diff);
+    inicioSemana.setHours(0, 0, 0, 0);
+
+    const finSemana = new Date(inicioSemana);
+    finSemana.setDate(inicioSemana.getDate() + 6);
+    finSemana.setHours(23, 59, 59, 999);
+
+    const sesionesSemana = await prisma.registroSesion.findMany({
       where: {
         negocioId: negocioId,
-        fechaHoraInicio: {
-          gte: new Date(`${anioActual}-01-01T00:00:00.000Z`),
-          lte: new Date(`${anioActual}-12-31T23:59:59.999Z`),
+        cerradaEn: {
+          gte: inicioSemana,
+          lte: finSemana,
         },
       },
-      select: { fechaHoraInicio: true },
+      select: { cerradaEn: true },
     });
 
-    const conteoMeses: { [key: string]: number } = {
-      Ene: 0, Feb: 0, Mar: 0, Abr: 0, May: 0, Jun: 0,
-      Jul: 0, Ago: 0, Sep: 0, Oct: 0, Nov: 0, Dic: 0,
+    const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    const conteoDias = [0, 0, 0, 0, 0, 0, 0];
+
+    sesionesSemana.forEach((sesion) => {
+      const day = new Date(sesion.cerradaEn).getDay();
+      const index = day === 0 ? 6 : day - 1; // Convertir 0 (Dom) a index 6
+      conteoDias[index] += 1;
+    });
+
+    const citasPorMesData = {
+      labels: diasSemana,
+      valores: conteoDias,
     };
-    const nombresMeses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
-    citasDelAnio.forEach((cita) => {
-      if (cita.fechaHoraInicio) {
-        const mesIndex = new Date(cita.fechaHoraInicio).getMonth();
-        conteoMeses[nombresMeses[mesIndex]] += 1;
-      }
-    });
-
-    // B. CONSUMO DE TINTA
+    // B. ARTICULOS USADOS (Caps y Agujas)
     const inicioMes = new Date(anioActual, mesActual, 1);
     const finMes = new Date(anioActual, mesActual + 1, 0, 23, 59, 59, 999);
 
@@ -52,49 +63,66 @@ export const getEstudioStats = async (req: Request, res: Response) => {
       },
       select: {
         cantidadUsada: true,
-        tinta: { select: { color: true, colorHex: true } },
+        tamanioCap: true,
       },
     });
 
-    const agrupacionTinta: { [key: string]: { caps: number; colorHex: string } } = {};
-    let totalCapsMes = 0;
-
+    let totalCaps = 0;
+    let totalTintaMl = 0;
     capsConsumidos.forEach((item) => {
-      const colorNombre = item.tinta.color;
-      const hex = item.tinta.colorHex;
-      totalCapsMes += item.cantidadUsada;
-
-      if (!agrupacionTinta[colorNombre]) {
-        agrupacionTinta[colorNombre] = { caps: 0, colorHex: hex };
-      }
-      agrupacionTinta[colorNombre].caps += item.cantidadUsada;
+      totalCaps += item.cantidadUsada;
+      if (item.tamanioCap === 'CHICA') totalTintaMl += item.cantidadUsada * 0.5;
+      else if (item.tamanioCap === 'MEDIANA') totalTintaMl += item.cantidadUsada * 1.0;
+      else if (item.tamanioCap === 'GRANDE') totalTintaMl += item.cantidadUsada * 2.0;
     });
 
-    const coloresRequeridos = ['Negro', 'Rojo', 'Azul', 'Verde', 'Blanco'];
-    const datosDona = coloresRequeridos.map((col) => ({
-      name: col,
-      caps: agrupacionTinta[col]?.caps || 0,
-      color: agrupacionTinta[col]?.colorHex || (col === 'Blanco' ? '#E0E0E0' : col === 'Negro' ? '#1A1A1A' : col === 'Rojo' ? '#FF3333' : col === 'Azul' ? '#3333FF' : '#33FF33'),
-    }));
+    const agujasConsumidas = await prisma.agujasUsadas.findMany({
+      where: {
+        registroSesion: {
+          negocioId: negocioId,
+          cerradaEn: { gte: inicioMes, lte: finMes },
+        },
+      },
+      include: {
+        aguja: { select: { nombre: true, tipo: true } },
+      },
+    });
 
-    // C. TOP ARTISTAS
-    const pagosAgrupados = await prisma.pago.groupBy({
-      by: ['registradoPorId'],
+    const articulosMap: { [key: string]: number } = {};
+    if (totalCaps > 0) articulosMap["Caps"] = totalCaps;
+    if (totalTintaMl > 0) articulosMap["Tinta (ml)"] = totalTintaMl;
+
+    agujasConsumidas.forEach((item) => {
+      const nombreAguja = item.aguja.nombre || item.aguja.tipo || "Aguja";
+      articulosMap[nombreAguja] = (articulosMap[nombreAguja] || 0) + item.cantidadUsada;
+    });
+
+    let totalArticulos = 0;
+    const datosDona = Object.entries(articulosMap).map(([name, cantidad], index) => {
+      totalArticulos += cantidad;
+      const mockColors = ["#4C1D95", "#06B6D4", "#C026D3", "#F59E0B", "#10B981", "#3B82F6", "#EF4444"];
+      const color = mockColors[index % mockColors.length];
+      return { name, cantidad, color };
+    });
+
+    // C. TOP ARTISTAS (Por cantidad de sesiones cerradas)
+    const sesionesAgrupadas = await prisma.registroSesion.groupBy({
+      by: ['artistaId'],
       where: { negocioId: negocioId },
-      _sum: { monto: true },
-      orderBy: { _sum: { monto: 'desc' } },
+      _count: { id: true },
+      orderBy: { _count: { id: 'desc' } },
       take: 5,
     });
 
     const topArtistas = await Promise.all(
-      pagosAgrupados.map(async (item) => {
+      sesionesAgrupadas.map(async (item) => {
         const artista = await prisma.usuario.findUnique({
-          where: { id: item.registradoPorId },
+          where: { id: item.artistaId },
           select: { nombre: true },
         });
         return {
           artista: artista?.nombre || 'Artista Desconocido',
-          monto: Number(item._sum.monto || 0),
+          monto: item._count.id, // Reusamos 'monto' como cantidad para mantener compatibilidad
         };
       })
     );
@@ -106,12 +134,9 @@ export const getEstudioStats = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       estudio: negocio?.nombre || 'Estudio Activo',
-      citasPorMes: {
-        labels: Object.keys(conteoMeses),
-        valores: Object.values(conteoMeses),
-      },
-      consumoTinta: {
-        totalCaps: totalCapsMes,
+      citasPorMes: citasPorMesData,
+      articulosUsados: {
+        totalArticulos: totalArticulos,
         detalles: datosDona,
       },
       topArtistas,

@@ -130,10 +130,10 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
           artistaNombre: solicitudActualizada.artista?.nombre || 'el artista asignado'
         };
 
-        const sesionExistente = await prisma.sesionChat.findUnique({ where: { id: jid } });
+        const sesionExistente = await prisma.sesionChat.findUnique({ where: { id_negocioId: { id: jid, negocioId } } });
         if (sesionExistente) {
           await prisma.sesionChat.update({
-            where: { id: jid },
+            where: { id_negocioId: { id: jid, negocioId } },
             data: { estado: 'ESPERANDO_FECHA', datos: datosSesion, ultimoMensaje: new Date() }
           });
         } else {

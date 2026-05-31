@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { obtenerPerfil, actualizarPerfil } from '../controllers/perfil.controller';
-import { verificarToken } from '../middleware/auth.middleware'; // 👈 Nombre corregido aquí
+import { verificarToken } from '../middleware/auth.middleware';
+import { uploadFoto } from '../middleware/upload.middleware';
 
 const router = Router();
 
@@ -8,6 +9,6 @@ const router = Router();
 router.get('/', verificarToken, obtenerPerfil);
 
 // Endpoint: PUT /api/perfil
-router.put('/', verificarToken, actualizarPerfil);
+router.put('/', verificarToken, uploadFoto, actualizarPerfil);
 
 export default router;

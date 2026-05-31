@@ -71,6 +71,13 @@ const extraerTamanioTattoo = (mensaje: string): string | null => {
     return `${ancho} x ${alto} cm`;
 };
 
+// ✅ Fix 5: Backoff exponencial para reconexiones (3s → 6s → 12s → 24s → 48s → 60s)
+const calcularBackoffDelay = (intentos: number): number => {
+    const base = 3000;
+    const delay = base * Math.pow(2, intentos - 1);
+    return Math.min(delay, 60000); // Máximo 60 segundos
+};
+
 interface BotInstance {
     sock: ReturnType<typeof makeWASocket>;
     conectado: boolean;
@@ -132,7 +139,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
     if (bots.has(negocioId)) {
         console.log(`[Bot:${negocioId}] Ya está en memoria, no reiniciamos.`);
         const bot = bots.get(negocioId)!;
-        io.emit(`whatsapp-status-${negocioId}`, { conectado: bot.conectado, qr: bot.qr });
+        io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: bot.conectado, qr: bot.qr });
         return {};
     }
 
@@ -183,7 +190,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
             console.log(`[Bot:${negocioId}] Nuevo QR generado`);
             bot.qr = qr;
             bot.conectado = false;
-            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr });
+            io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: false, qr });
         }
 
         if (connection === 'close') {
@@ -192,14 +199,15 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
             console.error(`[Bot:${negocioId}] Conexión cerrada. Razón: ${reason}`);
             bot.conectado = false;
             bot.qr = null;
-            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null });
+            io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null });
 
             if (shouldReconnect) {
                 if (bot.intentos < 5) {
                     bot.intentos++;
-                    console.log(`[Bot:${negocioId}] Reintentando (${bot.intentos}/5)...`);
+                    const delay = calcularBackoffDelay(bot.intentos);
+                    console.log(`[Bot:${negocioId}] Reintentando en ${delay / 1000}s (${bot.intentos}/5)...`);
                     bots.delete(negocioId);
-                    setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 3000);
+                    setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), delay);
                 } else {
                     console.error(`[Bot:${negocioId}] Demasiados intentos fallidos.`);
                     bots.delete(negocioId);
@@ -216,7 +224,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
             bot.conectado = true;
             bot.qr = null;
             bot.intentos = 0;
-            io.emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null });
+            io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null });
         }
     });
 
@@ -251,7 +259,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 const msgGuardado = await prisma.mensajeChat.create({
                     data: { negocioId, remoteJid, contenido: textMessage || '[IMAGEN]', direccion: 'ENTRANTE' }
                 });
-                io.emit('nuevo-mensaje', msgGuardado);
+                io.to(`negocio-${negocioId}`).emit('nuevo-mensaje', msgGuardado);
             } catch (dbErr) {
                 console.error(`[Bot:${negocioId}] Error guardando msg entrante:`, dbErr);
             }
@@ -505,7 +513,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
 
                             try {
                                 const cliente = await prisma.cliente.upsert({
-                                    where: { numeroWhatsapp: telefonoCliente },
+                                    where: { numeroWhatsapp_negocioId: { numeroWhatsapp: telefonoCliente, negocioId } },
                                     update: { nombre: datosFinales.nombre || 'Cliente' },
                                     create: { negocioId, nombre: datosFinales.nombre || 'Cliente', numeroWhatsapp: telefonoCliente }
                                 });
@@ -523,7 +531,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                     }
                                 });
 
-                                io.emit('nueva-solicitud', {
+                                io.to(`negocio-${negocioId}`).emit('nueva-solicitud', {
                                     id: solicitud.id,
                                     clienteNombre: cliente.nombre,
                                     clienteTelefono: telefonoCliente,
@@ -707,7 +715,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                     const msgGuardado = await prisma.mensajeChat.create({
                         data: { negocioId, remoteJid, contenido: respuesta, direccion: 'SALIENTE' }
                     });
-                    io.emit('nuevo-mensaje', msgGuardado);
+                    io.to(`negocio-${negocioId}`).emit('nuevo-mensaje', msgGuardado);
                 } catch (dbErr) {
                     console.error(`[Bot:${negocioId}] Error guardando msg saliente:`, dbErr);
                 }
@@ -765,7 +773,7 @@ export const reiniciarWhatsApp = async (negocioId: number, io: Server) => {
             bots.delete(negocioId);
         }
         await clearAuthState(`negocio-${negocioId}`);
-        io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, reiniciando: true });
+        io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, reiniciando: true });
         setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 1000);
         return { message: 'Bot reiniciado. Espera el nuevo QR.' };
     } catch (error) {
@@ -786,7 +794,7 @@ export const enviarMensaje = async (negocioId: number, remoteJid: string, text: 
             const msgGuardado = await prisma.mensajeChat.create({
                 data: { negocioId, remoteJid, contenido: text, direccion: 'SALIENTE' }
             });
-            bot.io.emit('nuevo-mensaje', msgGuardado);
+            bot.io.to(`negocio-${negocioId}`).emit('nuevo-mensaje', msgGuardado);
         } catch (dbErr) {
             console.error(`[Bot:${negocioId}] Error guardando msg saliente:`, dbErr);
         }
@@ -891,18 +899,19 @@ export const solicitarCodigoPairing = async (
             bot.conectado = true;
             bot.qr = null;
             bot.intentos = 0;
-            io.emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null, activo: true });
+            io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: true, qr: null, activo: true });
         }
         if (connection === 'close') {
             const reason = (lastDisconnect?.error as Boom)?.output?.statusCode;
             const shouldReconnect = reason !== DisconnectReason.loggedOut;
             bot.conectado = false;
-            io.emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, activo: false });
+            io.to(`negocio-${negocioId}`).emit(`whatsapp-status-${negocioId}`, { conectado: false, qr: null, activo: false });
 
             if (shouldReconnect && bot.intentos < 5) {
                 bot.intentos++;
+                const delay = calcularBackoffDelay(bot.intentos);
                 bots.delete(negocioId);
-                setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), 3000);
+                setTimeout(() => iniciarWhatsAppNegocio(negocioId, io), delay);
             } else {
                 bots.delete(negocioId);
                 if (!shouldReconnect) await clearAuthState(sessionId);

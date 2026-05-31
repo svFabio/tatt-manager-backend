@@ -58,7 +58,7 @@ export const crearCliente = async (req: Request, res: Response) => {
       return res.status(400).json({ data: null, error: 'El número de WhatsApp debe tener al menos 8 dígitos' });
     }
     const existente = await prisma.cliente.findUnique({
-      where: { numeroWhatsapp: telefonoLimpio },
+      where: { numeroWhatsapp_negocioId: { numeroWhatsapp: telefonoLimpio, negocioId } },
     });
     if (existente) {
       return res.status(409).json({ data: null, error: 'Ya existe un cliente con ese número de WhatsApp' });

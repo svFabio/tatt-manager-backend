@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { uploadToCloudinary, deleteFromCloudinary } from '../services/uploadService';
 
 const prisma = new PrismaClient();
 
@@ -38,7 +39,8 @@ export const obtenerPerfil = async (req: Request, res: Response): Promise<void> 
       id: usuario.id,
       nombre: usuario.nombre,
       email: usuario.email,
-      rol: rolUsuario
+      rol: rolUsuario,
+      fotoUrl: usuario.fotoUrl
     });
 
   } catch (error) {
@@ -74,10 +76,31 @@ export const actualizarPerfil = async (req: Request, res: Response): Promise<voi
       return;
     }
 
+    // Preparar data a actualizar
+    const updateData: any = { nombre: nombre.trim() };
+
+    // Si se subió una foto nueva
+    if (req.file) {
+      const usuarioActual = await prisma.usuario.findUnique({
+        where: { id: Number(usuarioId) },
+        select: { fotoPublicId: true }
+      });
+
+      // Si había foto vieja, la borramos
+      if (usuarioActual?.fotoPublicId) {
+        await deleteFromCloudinary(usuarioActual.fotoPublicId);
+      }
+
+      // Subimos la nueva
+      const upload = await uploadToCloudinary(req.file.buffer, 'perfil');
+      updateData.fotoUrl = upload.url;
+      updateData.fotoPublicId = upload.publicId;
+    }
+
     const usuarioActualizado = await prisma.usuario.update({
       where: { id: Number(usuarioId) },
-      data: { nombre: nombre.trim() },
-      select: { id: true, nombre: true, email: true }
+      data: updateData,
+      select: { id: true, nombre: true, email: true, fotoUrl: true }
     });
 
     res.status(200).json({

@@ -152,7 +152,7 @@ export class CitasService {
         fechaFin.setHours(fechaFin.getHours() + duracion);
 
         let cliente = await prisma.cliente.findUnique({
-            where: { numeroWhatsapp: telefonoLimpio }
+            where: { numeroWhatsapp_negocioId: { numeroWhatsapp: telefonoLimpio, negocioId } }
         });
 
         if (!cliente) {
