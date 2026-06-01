@@ -26,6 +26,11 @@ enum EstadoCita {
   FINALIZADA
   CANCELADA
 }
+enum EstadoPago {
+  PENDIENTE_VALIDACION
+  APROBADO
+  RECHAZADO
+}
 enum TipoMovimiento {
   ENTRADA
   DESCUENTO_SESION
@@ -274,9 +279,11 @@ model HistorialInventario {
 }
 model Pago {
   id                 Int      @id @default(autoincrement())
-  monto              Decimal  @db.Decimal(10, 2)
+  monto              Decimal    @db.Decimal(10, 2)
   fotoComprobanteUrl String?
-  registradoEn       DateTime @default(now())
+  estadoValidacion   EstadoPago @default(PENDIENTE_VALIDACION)
+  expiradoEn         DateTime?
+  registradoEn       DateTime   @default(now())
   negocioId       Int
   negocio         Negocio @relation(fields: [negocioId], references: [id])
   clienteId       Int
