@@ -171,12 +171,13 @@ export class CitasService {
         const citaSolapada = await prisma.cita.findFirst({
             where: {
                 negocioId,
+                ...(artistaId ? { artistaId } : {}),
                 estadoCita: { not: 'CANCELADA' },
                 fechaHoraInicio: { lt: fechaFin },
                 fechaHoraFin: { gt: fechaCita },
             }
         });
-        if (citaSolapada) throw { status: 409, message: 'Este horario se solapa con otra cita existente.' };
+        if (citaSolapada) throw { status: 409, message: 'Este horario se solapa con otra cita existente para este artista.' };
 
         return await prisma.cita.create({
             data: {
