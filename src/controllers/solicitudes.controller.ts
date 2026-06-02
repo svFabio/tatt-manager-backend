@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
-import { EstadoSolicitud } from '@prisma/client';
 export const getSolicitudes = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { estado } = req.query;
@@ -11,7 +10,7 @@ export const getSolicitudes = async (req: Request, res: Response) => {
   try {
     const where: Prisma.SolicitudWhereInput = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
-    where.estado = estado as EstadoSolicitud; // <--- Casting correcto al Enum
+      where.estado = estado as string;
     }
     // ARTISTA solo ve solicitudes asignadas a él
     if (rol === 'ARTISTA' && usuarioId) {
