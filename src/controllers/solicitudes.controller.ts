@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
 export const getSolicitudes = async (req: Request, res: Response) => {
@@ -7,7 +8,7 @@ export const getSolicitudes = async (req: Request, res: Response) => {
   const rol = req.estudioActivo?.rol;
   const usuarioId = req.usuario?.id;
   try {
-    const where: any = { negocioId };
+    const where: Prisma.SolicitudWhereInput = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
       where.estado = estado as string;
     }
@@ -150,9 +151,10 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
     }
 
     res.json({ data: solicitudActualizada, error: null, mensajeEnviado: true });
-  } catch (error: any) {
-    console.error('Error cotizando solicitud:', error?.message || error);
-    console.error('Stack:', error?.stack);
+  } catch (error: unknown) {
+    const e = error as { message?: string; stack?: string };
+    console.error('Error cotizando solicitud:', e.message || error);
+    console.error('Stack:', e.stack);
     res.status(500).json({ data: null, error: 'Error al cotizar solicitud' });
   }
 };

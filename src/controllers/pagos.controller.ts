@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { enviarMensaje } from '../services/whatsappClient';
 
 export const crearPago = async (req: Request, res: Response) => {
@@ -52,7 +53,7 @@ export const getPagos = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { citaId } = req.query;
   try {
-    const where: any = { negocioId };
+    const where: Prisma.PagoWhereInput = { negocioId };
     if (citaId) {
       where.citaId = parseInt(citaId as string);
     }

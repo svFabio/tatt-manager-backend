@@ -42,7 +42,7 @@ export const getBusinessHours = async (negocioId: number): Promise<BusinessHours
                 };
             }
             // Fallback legacy: formato open/close dentro del JSON horarios
-            const horarios = config.horarios as any;
+            const horarios = config.horarios as { open?: string; close?: string; breakStart?: string; breakEnd?: string; intervalMinutes?: number };
             if (horarios?.open && horarios?.close) {
                 return {
                     open: horarios.open,
@@ -123,7 +123,12 @@ export const getAvailableSlots = async (
     endOfDay.setHours(23, 59, 59, 999);
 
     // Filtrar por artista si se proporcionó, sino por todo el negocio
-    const whereClause: any = {
+    const whereClause: {
+        negocioId: number;
+        estadoCita: { in: string[] };
+        fechaHoraInicio: { gte: Date; lte: Date };
+        artistaId?: number;
+    } = {
         negocioId,
         estadoCita: { in: ['CONFIRMADA', 'PENDIENTE'] },
         fechaHoraInicio: { gte: startOfDay, lte: endOfDay }

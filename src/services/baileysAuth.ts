@@ -10,7 +10,7 @@ export const usePrismaAuthState = async (sessionId: string): Promise<{ state: Au
                 return JSON.parse(session.creds, BufferJSON.reviver);
             }
             return null;
-        } catch (error) {
+        } catch {
             return null;
         }
     };
@@ -21,7 +21,7 @@ export const usePrismaAuthState = async (sessionId: string): Promise<{ state: Au
                 return JSON.parse(session.keys, BufferJSON.reviver);
             }
             return null;
-        } catch (error) {
+        } catch {
             return null;
         }
     }
@@ -46,7 +46,7 @@ export const usePrismaAuthState = async (sessionId: string): Promise<{ state: Au
             creds,
             keys: {
                 get: async (type, ids) => {
-                    const data: Record<string, any> = {};
+                    const data: Record<string, unknown> = {};
                     await Promise.all(ids.map(async (id) => {
                         const keyId = `session-${sessionId}-${type}-${id}`;
                         let value = await readSessionKeys(keyId, 'key'); 

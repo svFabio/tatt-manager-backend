@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
 import { AuthService, mobileTokenStore } from '../services/auth.service';
 
+const asError = (e: unknown): { status?: number; message?: string } =>
+    e instanceof Error ? e : (e as { status?: number; message?: string });
+
 /* ── Registro con email ───────────────────────────────────────────── */
 export const registrarConEmail = async (req: Request, res: Response) => {
     try {
@@ -10,9 +13,10 @@ export const registrarConEmail = async (req: Request, res: Response) => {
 
         const data = await AuthService.registrarConEmail(email, password, nombre);
         res.status(201).json(data);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en registrarConEmail:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al registrar la cuenta' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al registrar la cuenta' });
     }
 };
 
@@ -24,9 +28,10 @@ export const loginConEmail = async (req: Request, res: Response) => {
 
         const data = await AuthService.loginConEmail(email, password);
         res.json(data);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en loginConEmail:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al iniciar sesión' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al iniciar sesión' });
     }
 };
 
@@ -39,9 +44,10 @@ export const loginConGoogle = async (req: Request, res: Response) => {
         }
         const authData = await AuthService.handleGoogleLogin(googleToken, userInfo);
         res.json(authData);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en loginConGoogle:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al iniciar sesión con Google' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al iniciar sesión con Google' });
     }
 };
 
@@ -54,8 +60,9 @@ export const me = async (req: Request, res: Response) => {
         }
         const meData = await AuthService.getMe(userId);
         res.json(meData);
-    } catch (error: any) {
-        res.status(error.status || 500).json({ error: error.message || 'Error al obtener usuario' });
+    } catch (error: unknown) {
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al obtener usuario' });
     }
 };
 
@@ -67,9 +74,10 @@ export const misEstudios = async (req: Request, res: Response) => {
 
         const estudios = await AuthService.getEstudiosUsuario(userId);
         res.json(estudios);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en misEstudios:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al obtener estudios' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al obtener estudios' });
     }
 };
 
@@ -83,9 +91,10 @@ export const seleccionarEstudio = async (req: Request, res: Response) => {
 
         const data = await AuthService.seleccionarEstudio(userId, negocioId);
         res.json(data);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en seleccionarEstudio:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al seleccionar estudio' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al seleccionar estudio' });
     }
 };
 
@@ -99,9 +108,10 @@ export const crearEstudio = async (req: Request, res: Response) => {
 
         const estudio = await AuthService.crearEstudio(userId, nombre);
         res.status(201).json(estudio);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en crearEstudio:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al crear estudio' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al crear estudio' });
     }
 };
 
@@ -115,9 +125,10 @@ export const unirseAEstudio = async (req: Request, res: Response) => {
 
         const estudio = await AuthService.unirseAEstudio(userId, codigo);
         res.json(estudio);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Auth] Error en unirseAEstudio:', error);
-        res.status(error.status || 500).json({ error: error.message || 'Error al unirse al estudio' });
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al unirse al estudio' });
     }
 };
 
@@ -220,9 +231,10 @@ export const googleMobileCallback = async (req: Request, res: Response) => {
                     <div class="hint">Ya puedes cerrar esta ventana y regresar a la app.</div>
                 </div>
             </body></html>`);
-    } catch (err: any) {
+    } catch (err: unknown) {
+        const e = asError(err);
         console.error('[Auth] Error en googleMobileCallback:', err);
-        return htmlError(err.message || 'Error del servidor');
+        return htmlError(e.message || 'Error del servidor');
     }
 };
 

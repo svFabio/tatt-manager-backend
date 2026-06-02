@@ -28,7 +28,8 @@ async function main() {
       });
     }
 
-    const sol = await prisma.solicitud.create({
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _sol = await prisma.solicitud.create({
       data: {
         tipo: "Tatuaje Personalizado",
         estado: "PENDIENTE",

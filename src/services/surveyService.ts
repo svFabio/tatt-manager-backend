@@ -1,1 +1,3 @@
-import cron from 'node-cron';export const iniciarSurvey = () => {    console.log('[Cron] 📊 Sistema de encuestas DESACTIVADO por desarrollo.');};
+export const iniciarSurvey = () => {
+    console.log('[Cron] 📊 Sistema de encuestas DESACTIVADO por desarrollo.');
+};

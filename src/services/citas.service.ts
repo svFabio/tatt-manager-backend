@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
-import { getAvailableSlots, getBusinessHours } from './calendarService';
+import { getAvailableSlots } from './calendarService';
 
 export interface CrearCitaAdminDTO {
     clienteNombre: string;
@@ -28,7 +28,11 @@ export interface CrearCitaTatuajeDTO {
 
 export class CitasService {
     static async getPendientes(negocioId: number, artistaId?: number) {
-        const whereClause: any = { negocioId, estadoCita: 'PENDIENTE' };
+        const whereClause: {
+            negocioId: number;
+            estadoCita: string;
+            artistaId?: number;
+        } = { negocioId, estadoCita: 'PENDIENTE' };
         if (artistaId) whereClause.artistaId = artistaId;
         return await prisma.cita.findMany({
             where: whereClause,
@@ -88,7 +92,12 @@ export class CitasService {
             fechaHasta.setUTCHours(23, 59, 59, 999);
         }
         
-        const whereClause: any = {
+        const whereClause: {
+            negocioId: number;
+            fechaHoraInicio: { gte: Date; lte: Date };
+            estadoCita: { not: string };
+            artistaId?: number;
+        } = {
             negocioId,
             fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
             estadoCita: { not: 'CANCELADA' }

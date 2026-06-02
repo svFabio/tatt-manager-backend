@@ -20,12 +20,13 @@ export const listarSolicitudes = async (req: Request, res: Response) => {
             data: solicitudes
         });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('[Controlador getSolicitudes] ❌ Error:', error);
+        const e = error as { message?: string };
         
         return res.status(500).json({
             ok: false,
-            message: error.message || "Error interno al recuperar las solicitudes."
+            message: e.message || "Error interno al recuperar las solicitudes."
         });
     }
 };
@@ -45,8 +46,9 @@ export const listarCitasPorEstado = async (req: Request, res: Response) => {
             artistaId
         );
         return res.status(200).json({ ok: true, data: citas });
-    } catch (error: any) {
-        return res.status(500).json({ ok: false, message: error.message });
+    } catch (error: unknown) {
+        const e = error as { message?: string };
+        return res.status(500).json({ ok: false, message: e.message });
     }
 };
 
@@ -64,9 +66,10 @@ export const obtenerDetalleCita = async (req: Request, res: Response) => {
         }
 
         return res.status(200).json({ ok: true, data: cita });
-    } catch (error: any) {
-        const status = error.message === "Cita no encontrada" ? 404 : 500;
-        return res.status(status).json({ ok: false, message: error.message });
+    } catch (error: unknown) {
+        const e = error as { message?: string };
+        const status = e.message === "Cita no encontrada" ? 404 : 500;
+        return res.status(status).json({ ok: false, message: e.message });
     }
 };
 

@@ -104,17 +104,19 @@ export const crearRegistroSesion = async (req: Request, res: Response) => {
       },
     });
     res.status(201).json({ data: registroCompleto, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creando registro de sesión:', error);
-    if (error.status) {
-      return res.status(error.status).json({ data: null, error: error.message });
+    const e = error as { status?: number; message?: string };
+    if (e.status) {
+      return res.status(e.status).json({ data: null, error: e.message });
     }
     res.status(500).json({ data: null, error: 'Error al crear registro de sesión' });
   }
 };
 export const getRegistrosSesion = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
-  let { artistaId, desde, hasta, search } = req.query;
+  const { artistaId: artistaIdQuery, desde, hasta, search } = req.query;
+  let artistaId = artistaIdQuery;
 
   const rol = req.estudioActivo?.rol;
   if (rol === 'ARTISTA') {
@@ -122,7 +124,7 @@ export const getRegistrosSesion = async (req: Request, res: Response) => {
   }
 
   try {
-    const where: any = { negocioId };
+    const where: Prisma.RegistroSesionWhereInput = { negocioId };
     if (artistaId) {
       where.artistaId = parseInt(artistaId as string);
     }

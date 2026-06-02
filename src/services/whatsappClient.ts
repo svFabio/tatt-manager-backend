@@ -105,7 +105,7 @@ const normalizarTelefono = (valor: string): string => valor.replace(/\D/g, '');
 
 const esTelefonoValido = (valor: string): boolean => /^\d{7,}$/.test(valor);
 
-const obtenerTelefonoCliente = (msg: any, remoteJid: string, negocioId: number): string | null => {
+const obtenerTelefonoCliente = (msg: { key?: { fromMe?: boolean; participantPn?: string; participant?: string }; participant?: string }, remoteJid: string, negocioId: number): string | null => {
     const fromMe = msg.key?.fromMe;
     if (fromMe) return null;
 
@@ -324,7 +324,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 }
 
                 let respuesta = '';
-                const datos = sesion.datos as any;
+                const datos = sesion.datos as Record<string, unknown>;
 
                 switch (contexto.estado) {
                     case 'INICIO': {
@@ -637,7 +637,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             break;
                         }
 
-                        let horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
+                        const horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
                         
                         // Doble chequeo de disponibilidad del ARTISTA
                         const fechaSeleccionada = new Date(datos.fechaSeleccionada);
@@ -704,7 +704,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                     data: {
                                         negocioId,
                                         monto: montoAnticipo,
-                                        clienteId: solicitudRelacionada?.clienteId!,
+                                        clienteId: solicitudRelacionada?.clienteId ?? undefined,
                                         citaId: nuevaCita.id,
                                         estadoValidacion: 'PENDIENTE_VALIDACION',
                                         expiradoEn,
@@ -839,7 +839,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 if (botInstance.conectado) {
                     try {
                         await botInstance.sock.sendMessage(remoteJid, { text: '❌ Error interno. Escribe el comando de inicio para reiniciar.' });
-                    } catch {  }
+                    } catch { /* intentionally empty – best-effort notification */ }
                 }
             }
         }
@@ -884,7 +884,7 @@ export const reiniciarWhatsApp = async (negocioId: number, io: Server) => {
     try {
         const bot = bots.get(negocioId);
         if (bot) {
-            try { bot.sock.end(undefined); } catch {  }
+            try { bot.sock.end(undefined); } catch { /* intentionally empty */ }
             bots.delete(negocioId);
         }
         await clearAuthState(`negocio-${negocioId}`);
@@ -972,7 +972,7 @@ export const solicitarCodigoPairing = async (
         if (botExistente.conectado) {
             return { error: 'El bot ya esta conectado. Desvinculalo primero.' };
         }
-        try { botExistente.sock.end(undefined); } catch {  }
+        try { botExistente.sock.end(undefined); } catch { /* intentionally empty */ }
         bots.delete(negocioId);
     }
 
@@ -1043,7 +1043,7 @@ export const solicitarCodigoPairing = async (
     } catch (error: unknown) {
         const err = error as { message?: string };
         console.error(`[Bot:${negocioId}] Error en pairing code:`, error);
-        try { sock.end(undefined); } catch {  }
+        try { sock.end(undefined); } catch { /* intentionally empty */ }
         bots.delete(negocioId);
         return { error: err?.message || 'Error al generar el codigo. Intenta con QR.' };
     }
