@@ -26,7 +26,7 @@ async function testGeneration() {
         const text = response.text();
         console.log('✅ SUCCESS!');
         console.log('📝 Response:', text);
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('❌ ERROR DETAILS:');
         console.error(error);
     }

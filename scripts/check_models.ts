@@ -35,7 +35,7 @@ async function checkApi() {
             console.log('✅ API Connection SUCCESS!');
             console.log('📋 Available Models:');
             if (data.models) {
-                data.models.forEach((m: any) => {
+                data.models.forEach((m: { name: string }) => {
                     // Filter to show only relevant generation models
                     if (m.name.includes('gemini')) {
                         console.log(`   - ${m.name}`);

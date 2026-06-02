@@ -105,7 +105,7 @@ const normalizarTelefono = (valor: string): string => valor.replace(/\D/g, '');
 
 const esTelefonoValido = (valor: string): boolean => /^\d{7,}$/.test(valor);
 
-const obtenerTelefonoCliente = (msg: any, remoteJid: string, negocioId: number): string | null => {
+const obtenerTelefonoCliente = (msg: { key?: { fromMe?: boolean; participantPn?: string; participant?: string }; participant?: string }, remoteJid: string, negocioId: number): string | null => {
     const fromMe = msg.key?.fromMe;
     if (fromMe) return null;
 
@@ -324,7 +324,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 }
 
                 let respuesta = '';
-                const datos = sesion.datos as any;
+                const datos = sesion.datos as Record<string, unknown>;
 
                 switch (contexto.estado) {
                     case 'INICIO': {
@@ -637,7 +637,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             break;
                         }
 
-                        let horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
+                        const horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
                         
                         // Doble chequeo de disponibilidad del ARTISTA
                         const fechaSeleccionada = new Date(datos.fechaSeleccionada);
@@ -670,6 +670,17 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             finCita.setMinutes(inicioCita.getMinutes() + ((horasTatuaje % 1) * 60));
 
                             const solicitudRelacionada = await prisma.solicitud.findUnique({ where: { id: datos.solicitudId } });
+
+                            // ── Obtener configuración de anticipo ──────────────────────────────
+                            const config = await prisma.configuracion.findUnique({ where: { negocioId } });
+                            const cobrarAdelanto = config?.cobrarAdelanto ?? true;
+                            const porcentaje     = config?.porcentajeAdelanto ?? 50;
+                            const precioCotizado = Number(datos.precioCotizado) || 0;
+                            const montoAnticipo  = cobrarAdelanto && precioCotizado > 0
+                                ? parseFloat(((precioCotizado * porcentaje) / 100).toFixed(2))
+                                : 0;
+
+                            // ── Cita en PENDIENTE hasta que llegue el comprobante ─────────────
                             const nuevaCita = await prisma.cita.create({
                                 data: {
                                     negocioId,
@@ -679,20 +690,124 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                     fechaHoraInicio: inicioCita,
                                     fechaHoraFin: finCita,
                                     duracionEnHoras: horasTatuaje,
-                                    estadoCita: 'CONFIRMADA'
+                                    estadoCita: cobrarAdelanto && montoAnticipo > 0 ? 'PENDIENTE' : 'CONFIRMADA'
                                 }
                             });
 
                             const horaFinStr = `${finCita.getHours().toString().padStart(2, '0')}:${finCita.getMinutes().toString().padStart(2, '0')}`;
                             const artistaNombre = datos.artistaNombre || 'tu artista';
-                            respuesta = `✅ *¡Cita confirmada!*\n\n📋 *Detalles:*\n👤 Cliente: ${datos.nombre}\n📌 Artista: *${artistaNombre}*\n📅 Fecha: *${formatearFechaAmigable(fechaSeleccionada)}*\n🕐 Hora: *${horaFormateada}* - *${horaFinStr}*\n⏱️ Duración: ${horasTatuaje} horas\n💰 Precio: ${datos.precioCotizado ? `$${datos.precioCotizado}` : 'Por confirmar'}\n\n¡Te esperamos! 🔥`;
 
-                            await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            if (cobrarAdelanto && montoAnticipo > 0) {
+                                // ── Pago provisional con expiración de 1 hora ────────────────
+                                const expiradoEn = new Date(Date.now() + 60 * 60 * 1000);
+                                await prisma.pago.create({
+                                    data: {
+                                        negocioId,
+                                        monto: montoAnticipo,
+                                        clienteId: solicitudRelacionada?.clienteId ?? undefined,
+                                        citaId: nuevaCita.id,
+                                        estadoValidacion: 'PENDIENTE_VALIDACION',
+                                        expiradoEn,
+                                        // registradoPorId se establece como el primer admin del negocio
+                                        registradoPorId: (await prisma.miembroEstudio.findFirst({
+                                            where: { negocioId, rol: 'ADMIN' },
+                                            select: { usuarioId: true }
+                                        }))?.usuarioId ?? solicitudRelacionada?.artistaId ?? 1
+                                    }
+                                });
+
+                                // ── Enviar QR del estudio + instrucciones ─────────────────────
+                                const qrUrl = config?.qrContenido || '';
+                                if (qrUrl && (qrUrl.startsWith('http') || qrUrl.startsWith('data:'))) {
+                                    try {
+                                        await botInstance.sock.sendMessage(remoteJid, { image: { url: qrUrl }, caption: '🏦 *QR de pago del estudio*' });
+                                    } catch (imgErr) {
+                                        console.error(`[Bot:${negocioId}] Error enviando QR:`, imgErr);
+                                    }
+                                }
+
+                                respuesta = `📋 *Resumen de tu cita:*\n👤 Cliente: ${datos.nombre}\n📌 Artista: *${artistaNombre}*\n📅 Fecha: *${formatearFechaAmigable(fechaSeleccionada)}*\n🕐 Hora: *${horaFormateada}* - *${horaFinStr}*\n⏱️ Duración: ${horasTatuaje} horas\n💰 Precio total: $${precioCotizado}\n\n💳 *Anticipo requerido (${porcentaje}%): $${montoAnticipo}*\n\nTu reserva está *pendiente*. Tienes *1 hora* para enviarnos el comprobante de pago vía esta conversación y confirmar tu cita definitivamente.\n\n⏰ Si no recibimos el comprobante a tiempo, la reserva se liberará automáticamente.`;
+
+                                // ── Cambiar sesión a ESPERANDO_COMPROBANTE ────────────────────
+                                await prisma.sesionChat.updateMany({
+                                    where: { id: remoteJid, negocioId },
+                                    data: {
+                                        estado: 'ESPERANDO_COMPROBANTE',
+                                        datos: { ...datos, citaId: nuevaCita.id, montoAnticipo }
+                                    }
+                                });
+                            } else {
+                                // Sin anticipo → cita confirmada directamente
+                                respuesta = `✅ *¡Cita confirmada!*\n\n📋 *Detalles:*\n👤 Cliente: ${datos.nombre}\n📌 Artista: *${artistaNombre}*\n📅 Fecha: *${formatearFechaAmigable(fechaSeleccionada)}*\n🕐 Hora: *${horaFormateada}* - *${horaFinStr}*\n⏱️ Duración: ${horasTatuaje} horas\n💰 Precio: ${precioCotizado ? `$${precioCotizado}` : 'Por confirmar'}\n\n¡Te esperamos! 🔥`;
+                                await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
+                            }
                         } catch (err) {
                             console.error(`[Bot:${negocioId}] Error creando cita:`, err);
                             respuesta = 'Hubo un error al guardar tu cita. Por favor intenta de nuevo.';
                         }
 
+                        break;
+                    }
+
+                    case 'ESPERANDO_COMPROBANTE': {
+                        if (!hasImage) {
+                            respuesta = '📸 Para confirmar tu cita, por favor *envía la imagen* del comprobante de pago.';
+                            break;
+                        }
+
+                        // Candado atómico — evita procesar la misma imagen dos veces
+                        const lock = await prisma.sesionChat.updateMany({
+                            where: { id: remoteJid, negocioId, estado: 'ESPERANDO_COMPROBANTE' },
+                            data: { estado: 'PROCESANDO_COMPROBANTE' }
+                        });
+                        if (lock.count === 0) {
+                            console.log(`[Bot:${negocioId}] Candado activado: ignorando comprobante duplicado de ${remoteJid}`);
+                            continue;
+                        }
+
+                        let comprobanteUrl: string | null = null;
+                        try {
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                            const uploadResult = await new Promise<import('cloudinary').UploadApiResponse>((resolve, reject) => {
+                                cloudinary.uploader.upload_stream({ folder: 'comprobantes_pago' }, (error, result) => {
+                                    if (error) reject(error); else resolve(result!);
+                                }).end(buffer);
+                            });
+                            comprobanteUrl = uploadResult.secure_url;
+                        } catch (uploadErr) {
+                            console.error(`[Bot:${negocioId}] Error subiendo comprobante:`, uploadErr);
+                            await prisma.sesionChat.updateMany({
+                                where: { id: remoteJid, negocioId },
+                                data: { estado: 'ESPERANDO_COMPROBANTE' }
+                            });
+                            respuesta = '❌ Error al subir la imagen. Intenta enviarla de nuevo.';
+                            break;
+                        }
+
+                        // Actualizar el Pago provisional con la URL del comprobante
+                        const pagoActualizado = await prisma.pago.updateMany({
+                            where: {
+                                negocioId,
+                                citaId: datos.citaId,
+                                estadoValidacion: 'PENDIENTE_VALIDACION',
+                                fotoComprobanteUrl: null
+                            },
+                            data: { fotoComprobanteUrl: comprobanteUrl }
+                        });
+
+                        if (pagoActualizado.count === 0) {
+                            console.warn(`[Bot:${negocioId}] No se encontró pago provisional para cita ${datos.citaId}`);
+                        }
+
+                        // Emitir evento Socket.IO para que la app mobile actualice la lista
+                        io.to(`negocio-${negocioId}`).emit('nuevo-comprobante-pago', {
+                            citaId: datos.citaId,
+                            clienteNombre: datos.nombre,
+                            comprobanteUrl
+                        });
+
+                        respuesta = `✅ *¡Comprobante recibido!*\n\nEl equipo revisará tu pago y confirmará tu cita a la brevedad. Te avisaremos por aquí.\n\n¡Gracias por tu confianza! 🙏🎨`;
+                        await prisma.sesionChat.deleteMany({ where: { id: remoteJid, negocioId } });
                         break;
                     }
 
@@ -724,7 +839,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 if (botInstance.conectado) {
                     try {
                         await botInstance.sock.sendMessage(remoteJid, { text: '❌ Error interno. Escribe el comando de inicio para reiniciar.' });
-                    } catch {  }
+                    } catch { /* intentionally empty – best-effort notification */ }
                 }
             }
         }
@@ -769,7 +884,7 @@ export const reiniciarWhatsApp = async (negocioId: number, io: Server) => {
     try {
         const bot = bots.get(negocioId);
         if (bot) {
-            try { bot.sock.end(undefined); } catch {  }
+            try { bot.sock.end(undefined); } catch { /* intentionally empty */ }
             bots.delete(negocioId);
         }
         await clearAuthState(`negocio-${negocioId}`);
@@ -857,7 +972,7 @@ export const solicitarCodigoPairing = async (
         if (botExistente.conectado) {
             return { error: 'El bot ya esta conectado. Desvinculalo primero.' };
         }
-        try { botExistente.sock.end(undefined); } catch {  }
+        try { botExistente.sock.end(undefined); } catch { /* intentionally empty */ }
         bots.delete(negocioId);
     }
 
@@ -928,7 +1043,7 @@ export const solicitarCodigoPairing = async (
     } catch (error: unknown) {
         const err = error as { message?: string };
         console.error(`[Bot:${negocioId}] Error en pairing code:`, error);
-        try { sock.end(undefined); } catch {  }
+        try { sock.end(undefined); } catch { /* intentionally empty */ }
         bots.delete(negocioId);
         return { error: err?.message || 'Error al generar el codigo. Intenta con QR.' };
     }

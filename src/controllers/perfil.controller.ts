@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 
 export const obtenerPerfil = async (req: Request, res: Response): Promise<void> => {
   try {
-    const usuarioAuth = (req as any).usuario; 
+    const usuarioAuth = req.usuario; 
     const usuarioId = usuarioAuth?.id;
 
     if (!usuarioId) {
@@ -30,8 +30,8 @@ export const obtenerPerfil = async (req: Request, res: Response): Promise<void> 
 
     // Mapeamos el rol de forma segura para enviárselo estructurado al frontend
     let rolUsuario = 'ADMINISTRADOR'; // Rol por defecto si no tiene membresías
-    if ((usuario as any).membresias && (usuario as any).membresias.length > 0) {
-      rolUsuario = (usuario as any).membresias[0].rol;
+    if (usuario.membresias && usuario.membresias.length > 0) {
+      rolUsuario = usuario.membresias[0].rol;
     }
 
     // Enviamos una respuesta limpia, estructurada y fácil de leer para tu perfil.tsx
@@ -51,7 +51,7 @@ export const obtenerPerfil = async (req: Request, res: Response): Promise<void> 
 
 export const actualizarPerfil = async (req: Request, res: Response): Promise<void> => {
   try {
-    const usuarioAuth = (req as any).usuario; 
+    const usuarioAuth = req.usuario; 
     const usuarioId = usuarioAuth?.id;
     const { nombre } = req.body;
 
@@ -77,7 +77,7 @@ export const actualizarPerfil = async (req: Request, res: Response): Promise<voi
     }
 
     // Preparar data a actualizar
-    const updateData: any = { nombre: nombre.trim() };
+    const updateData: Record<string, unknown> = { nombre: nombre.trim() };
 
     // Si se subió una foto nueva
     if (req.file) {

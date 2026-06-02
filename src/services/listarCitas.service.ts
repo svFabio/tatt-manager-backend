@@ -4,7 +4,11 @@ import { prisma } from '../lib/prisma';
 // FUNCION PARA OBTENER SOLICITUDES CON ESTADO PENDIENTE, CONFIRMADA, CANCELADA O NO_ASISTIO
 export const getSolicitudes = async (negocioId: number, artistaId?: number) => {
     try {
-        const whereClause: any = {
+        const whereClause: {
+            negocioId: number;
+            estadoCita: { in: string[] };
+            artistaId?: number;
+        } = {
             negocioId: negocioId,
             estadoCita: {
                 in: [
@@ -52,7 +56,11 @@ export const getSolicitudes = async (negocioId: number, artistaId?: number) => {
 //FUNCION PARA OBTNER LAS CITAS DE UN ESTADO ESPECIFICO
 export const getCitasByEstado = async (negocioId: number, estado?: EstadoCita, artistaId?: number) => {
     try {
-        const whereClause: any = {
+        const whereClause: {
+            negocioId: number;
+            estadoCita: { in: string[] } | string;
+            artistaId?: number;
+        } = {
             negocioId: negocioId,
             estadoCita: estado ? estado : {
                 in: [
@@ -122,7 +130,7 @@ export const getCitaDetails = async (citaId: number) => {
             recibido: cita.creadoEn || 'No especificada',
             referencia: cita.solicitud?.fotoReferenciaUrl || 'No especificada',
             zona: cita.zonaDelCuerpo || cita.solicitud?.zonaDelCuerpo || 'No especificada',
-            tamano: (cita as any).tamanoEnCm || cita.solicitud?.tamanoEnCm || 'No especificado',
+            tamano: (cita as { tamanoEnCm?: string }).tamanoEnCm || cita.solicitud?.tamanoEnCm || 'No especificado',
             clienteNombre: cita.cliente?.nombre || 'Desconocido',
             artistaNombre: cita.artista?.nombre || 'Desconocido',
             estado: cita.estadoCita,
