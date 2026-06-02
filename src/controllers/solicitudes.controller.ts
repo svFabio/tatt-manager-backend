@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
+import { EstadoSolicitud } from '@prisma/client';
 export const getSolicitudes = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
   const { estado } = req.query;
@@ -10,7 +11,7 @@ export const getSolicitudes = async (req: Request, res: Response) => {
   try {
     const where: Prisma.SolicitudWhereInput = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
-      where.estado = estado as string;
+    where.estado = estado as EstadoSolicitud; // <--- Casting correcto al Enum
     }
     // ARTISTA solo ve solicitudes asignadas a él
     if (rol === 'ARTISTA' && usuarioId) {
@@ -114,7 +115,7 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
 
-      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
+      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: Bs. ${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
       if (mensajePersonalizado) {
         mensaje += `\n💬 *Mensaje del estudio:* ${mensajePersonalizado}\n`;
       }
