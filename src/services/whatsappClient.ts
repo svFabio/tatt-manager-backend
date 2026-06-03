@@ -324,7 +324,21 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                 }
 
                 let respuesta = '';
-                const datos = sesion.datos as Record<string, unknown>;
+                const datos = sesion.datos as {
+                    nombre?: string;
+                    artistaId?: number;
+                    artistaNombre?: string;
+                    descripcionTattoo?: string;
+                    tamanio?: string;
+                    fotoReferenciaUrl?: string | null;
+                    zonaDelCuerpo?: string;
+                    artistasDisponibles?: { id: number; nombre: string }[];
+                    fechaSeleccionada?: string | Date;
+                    solicitudId?: number;
+                    horasEstimadas?: number | string;
+                    precioCotizado?: number | string;
+                    [key: string]: unknown;
+                };
 
                 switch (contexto.estado) {
                     case 'INICIO': {
@@ -413,11 +427,11 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                                 where: { id: remoteJid, negocioId },
                                 data: { 
                                     estado: 'ESPERANDO_DESCRIPCION', 
-                                    datos: { 
-                                        nombre: datos.nombre, 
-                                        artistaId: artistaSeleccionado.id, 
-                                        artistaNombre: artistaSeleccionado.nombre 
-                                    } 
+                                    datos: {
+                                        nombre: datos.nombre ?? null,
+                                        artistaId: artistaSeleccionado.id,
+                                        artistaNombre: artistaSeleccionado.nombre
+                                    }
                                 }
                             });
                         }
@@ -640,7 +654,7 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                         const horaFormateada = `${match[1].padStart(2, '0')}:${match[2]}`;
                         
                         // Doble chequeo de disponibilidad del ARTISTA
-                        const fechaSeleccionada = new Date(datos.fechaSeleccionada);
+                        const fechaSeleccionada = new Date(datos.fechaSeleccionada as string | number | Date);
                         const horasTatuaje = Number(datos.horasEstimadas) || 1;
                         const artistaIdParaValidar = datos.artistaId as number | undefined;
                         const disponiblesAhora = await getAvailableSlots(negocioId, fechaSeleccionada, horasTatuaje, artistaIdParaValidar);
@@ -669,7 +683,9 @@ export const iniciarWhatsAppNegocio = async (negocioId: number, io: Server): Pro
                             finCita.setHours(inicioCita.getHours() + Math.floor(horasTatuaje));
                             finCita.setMinutes(inicioCita.getMinutes() + ((horasTatuaje % 1) * 60));
 
-                            const solicitudRelacionada = await prisma.solicitud.findUnique({ where: { id: datos.solicitudId } });
+                            const solicitudRelacionada = datos.solicitudId
+                                ? await prisma.solicitud.findUnique({ where: { id: datos.solicitudId } })
+                                : null;
 
                             // ── Obtener configuración de anticipo ──────────────────────────────
                             const config = await prisma.configuracion.findUnique({ where: { negocioId } });

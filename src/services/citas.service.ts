@@ -1,3 +1,4 @@
+import { EstadoCita, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
 import { getAvailableSlots } from './calendarService';
@@ -28,11 +29,7 @@ export interface CrearCitaTatuajeDTO {
 
 export class CitasService {
     static async getPendientes(negocioId: number, artistaId?: number) {
-        const whereClause: {
-            negocioId: number;
-            estadoCita: string;
-            artistaId?: number;
-        } = { negocioId, estadoCita: 'PENDIENTE' };
+        const whereClause: Prisma.CitaWhereInput = { negocioId, estadoCita: EstadoCita.PENDIENTE };
         if (artistaId) whereClause.artistaId = artistaId;
         return await prisma.cita.findMany({
             where: whereClause,
@@ -92,15 +89,10 @@ export class CitasService {
             fechaHasta.setUTCHours(23, 59, 59, 999);
         }
         
-        const whereClause: {
-            negocioId: number;
-            fechaHoraInicio: { gte: Date; lte: Date };
-            estadoCita: { not: string };
-            artistaId?: number;
-        } = {
+        const whereClause: Prisma.CitaWhereInput = {
             negocioId,
             fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
-            estadoCita: { not: 'CANCELADA' }
+            estadoCita: { not: EstadoCita.CANCELADA }
         };
         if (artistaId) whereClause.artistaId = artistaId;
 

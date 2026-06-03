@@ -1,3 +1,4 @@
+import { EstadoCita, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 export interface BusinessHours {
@@ -123,14 +124,9 @@ export const getAvailableSlots = async (
     endOfDay.setHours(23, 59, 59, 999);
 
     // Filtrar por artista si se proporcionó, sino por todo el negocio
-    const whereClause: {
-        negocioId: number;
-        estadoCita: { in: string[] };
-        fechaHoraInicio: { gte: Date; lte: Date };
-        artistaId?: number;
-    } = {
+    const whereClause: Prisma.CitaWhereInput = {
         negocioId,
-        estadoCita: { in: ['CONFIRMADA', 'PENDIENTE'] },
+        estadoCita: { in: [EstadoCita.CONFIRMADA, EstadoCita.PENDIENTE] },
         fechaHoraInicio: { gte: startOfDay, lte: endOfDay }
     };
 

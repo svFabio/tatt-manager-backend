@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
+import { Prisma, EstadoSolicitud } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
 export const getSolicitudes = async (req: Request, res: Response) => {
@@ -10,7 +10,7 @@ export const getSolicitudes = async (req: Request, res: Response) => {
   try {
     const where: Prisma.SolicitudWhereInput = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
-      where.estado = estado as string;
+      where.estado = estado as EstadoSolicitud;
     }
     // ARTISTA solo ve solicitudes asignadas a él
     if (rol === 'ARTISTA' && usuarioId) {

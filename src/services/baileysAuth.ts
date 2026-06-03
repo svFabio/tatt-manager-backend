@@ -45,17 +45,17 @@ export const usePrismaAuthState = async (sessionId: string): Promise<{ state: Au
         state: {
             creds,
             keys: {
-                get: async (type, ids) => {
-                    const data: Record<string, unknown> = {};
+                get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+                    const data: { [id: string]: SignalDataTypeMap[T] } = {};
                     await Promise.all(ids.map(async (id) => {
                         const keyId = `session-${sessionId}-${type}-${id}`;
-                        let value = await readSessionKeys(keyId, 'key'); 
+                        let value = await readSessionKeys(keyId, 'key');
                         const row = await prisma.baileysSession.findUnique({ where: { id: keyId } });
                         if (row?.keys) {
                             value = JSON.parse(row.keys, BufferJSON.reviver);
                         }
                         if (value) {
-                            data[id] = value;
+                            data[id] = value as SignalDataTypeMap[T];
                         }
                     }));
                     return data;

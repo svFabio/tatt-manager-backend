@@ -1,14 +1,10 @@
-import { EstadoCita } from '@prisma/client';
+import { EstadoCita, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 // FUNCION PARA OBTENER SOLICITUDES CON ESTADO PENDIENTE, CONFIRMADA, CANCELADA O NO_ASISTIO
 export const getSolicitudes = async (negocioId: number, artistaId?: number) => {
     try {
-        const whereClause: {
-            negocioId: number;
-            estadoCita: { in: string[] };
-            artistaId?: number;
-        } = {
+        const whereClause: Prisma.CitaWhereInput = {
             negocioId: negocioId,
             estadoCita: {
                 in: [
@@ -56,11 +52,7 @@ export const getSolicitudes = async (negocioId: number, artistaId?: number) => {
 //FUNCION PARA OBTNER LAS CITAS DE UN ESTADO ESPECIFICO
 export const getCitasByEstado = async (negocioId: number, estado?: EstadoCita, artistaId?: number) => {
     try {
-        const whereClause: {
-            negocioId: number;
-            estadoCita: { in: string[] } | string;
-            artistaId?: number;
-        } = {
+        const whereClause: Prisma.CitaWhereInput = {
             negocioId: negocioId,
             estadoCita: estado ? estado : {
                 in: [
