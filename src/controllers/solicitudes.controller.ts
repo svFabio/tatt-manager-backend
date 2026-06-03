@@ -114,7 +114,7 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
 
-      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: Bs. ${precioCotizado}\n...`;
+      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: Bs. ${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
       if (mensajePersonalizado) {
         mensaje += `\n💬 *Mensaje del estudio:* ${mensajePersonalizado}\n`;
       }
