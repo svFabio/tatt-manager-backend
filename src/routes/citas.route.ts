@@ -21,11 +21,11 @@ import {
     listarCitasPorEstado,
     obtenerDetalleCita
 } from '../controllers/listarCitas.controller';
-
-const router = Router();
-
 import { verificarToken } from '../middleware/auth.middleware';
 import { tenantMiddleware } from '../middleware/tenant.middleware';
+import { uploadFoto } from '../middleware/upload.middleware';
+
+const router = Router();
 
 router.use(verificarToken, tenantMiddleware);
 
@@ -34,7 +34,7 @@ router.get('/artistas', getArtistasDisponibles);
 router.get('/pendientes', getPendientes);
 router.get('/resumen', getResumen);
 router.get('/horarios-disponibles', getHorariosDisponibles);
-router.post('/admin', crearCitaAdmin);
+router.post('/admin', uploadFoto, crearCitaAdmin);
 router.post('/:id/validar', validarCita);
 router.put('/:id/reprogramar', reprogramarCita);
 router.put('/:id/no-asistio', marcarNoAsistio);

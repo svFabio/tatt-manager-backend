@@ -121,6 +121,7 @@ model Cita {
   estiloDeTatuaje  String?
   zonaDelCuerpo    String?
   tamanoEnCm       String?
+  referenciaUrl    String?
   seniaPagada      Decimal    @default(0) @db.Decimal(10, 2)
   creadoEn        DateTime @default(now())
   negocioId   Int

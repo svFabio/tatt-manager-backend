@@ -113,3 +113,36 @@ export const actualizarPerfil = async (req: Request, res: Response): Promise<voi
     res.status(500).json({ error: 'Hubo un error al guardar los cambios.' });
   }
 };
+
+import bcrypt from 'bcryptjs';
+
+export const actualizarPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const usuarioAuth = req.usuario; 
+    const usuarioId = usuarioAuth?.id;
+    const { password } = req.body;
+
+    if (!usuarioId) {
+      res.status(401).json({ error: 'No autorizado.' });
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+      return;
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await prisma.usuario.update({
+      where: { id: Number(usuarioId) },
+      data: { password: hashedPassword }
+    });
+
+    res.status(200).json({ mensaje: 'Contraseña actualizada correctamente.' });
+
+  } catch (error) {
+    console.error('Error al actualizar contraseña:', error);
+    res.status(500).json({ error: 'Hubo un error al guardar la nueva contraseña.' });
+  }
+};

@@ -120,7 +120,7 @@ export const getCitaDetails = async (citaId: number) => {
             negocioId: cita.negocioId,
             fechaHoraInicio: cita.fechaHoraInicio || 'No especificada',
             recibido: cita.creadoEn || 'No especificada',
-            referencia: cita.solicitud?.fotoReferenciaUrl || 'No especificada',
+            referencia: cita.referenciaUrl || cita.solicitud?.fotoReferenciaUrl || null,
             zona: cita.zonaDelCuerpo || cita.solicitud?.zonaDelCuerpo || 'No especificada',
             tamano: (cita as { tamanoEnCm?: string }).tamanoEnCm || cita.solicitud?.tamanoEnCm || 'No especificado',
             clienteNombre: cita.cliente?.nombre || 'Desconocido',

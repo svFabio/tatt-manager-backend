@@ -10,7 +10,7 @@ const CAP_LABEL: Record<string, string> = {
 };
 
 type ItemInventario = {
-  tipo: 'tinta' | 'aguja';
+  tipo: 'tinta' | 'aguja' | 'cap';
   refId: number;
   nombre: string;
   marca: string;
@@ -34,6 +34,7 @@ interface AgujaRow {
   id: number;
   nombre: string;
   marca: string;
+  categoria: string;
   cantidadActual: number;
   cantidadMinima: number;
 }
@@ -54,7 +55,7 @@ function normalizarTinta(stock: StockTintaRow): ItemInventario {
 
 function normalizarAguja(aguja: AgujaRow): ItemInventario {
   return {
-    tipo: 'aguja',
+    tipo: aguja.categoria.toLowerCase() as 'tinta' | 'aguja' | 'cap',
     refId: aguja.id,
     nombre: aguja.nombre,
     marca: aguja.marca,

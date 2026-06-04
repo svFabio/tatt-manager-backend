@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { CitasService } from '../services/citas.service';
 import { getArtistasDelNegocio } from '../services/calendarService';
+import { uploadToCloudinary } from '../services/uploadService';
 
 const asError = (e: unknown): { status?: number; message?: string } =>
     e instanceof Error ? e : (e as { status?: number; message?: string });
@@ -48,20 +49,22 @@ export const getResumen = async (req: Request, res: Response) => {
   try {
     const resumen = await CitasService.getResumen(req.negocioId!);
     res.json(resumen);
-  } catch (error) {
-    console.error("Error en resumen:", error);
-    res.status(500).json({ error: 'Error al obtener resumen' });
+  } catch (error: unknown) {
+    res.status(500).json({ error: (error instanceof Error ? error.message : null) || 'Error obteniendo resumen' });
   }
 };
 
 export const getHorariosDisponibles = async (req: Request, res: Response) => {
   try {
     const { fecha, duracion, artistaId } = req.query;
-    if (!fecha) return res.status(400).json({ error: 'Fecha requerida' });
-    const duracionHoras = duracion ? Number(duracion) : 1;
-    const aId = artistaId ? Number(artistaId) : undefined;
-    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, duracionHoras, aId);
-    res.json({ horarios, fecha });
+    if (!fecha || !duracion || !artistaId) {
+      return res.status(400).json({ error: 'Se requieren fecha, duracion y artistaId' });
+    }
+    const d = parseInt(duracion as string) || 1;
+    const aId = parseInt(artistaId as string);
+
+    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, d, aId);
+    res.json({ horarios });
   } catch (error) {
     console.error("Error obteniendo horarios:", error);
     res.status(500).json({ error: 'Error al obtener horarios disponibles' });
@@ -70,11 +73,30 @@ export const getHorariosDisponibles = async (req: Request, res: Response) => {
 
 export const crearCitaAdmin = async (req: Request, res: Response) => {
   try {
-    const { clienteNombre, clienteTelefono, fecha, horario } = req.body;
+    // FormData envía todo como string — parseamos los campos numéricos explícitamente
+    const { clienteNombre, clienteTelefono, fecha, horario, zonaDelCuerpo, tamanoEnCm, duracionEnHoras, cotizacion, artistaId } = req.body;
+
     if (!clienteNombre || !clienteTelefono || !fecha || !horario) return res.status(400).json({ error: 'Todos los campos son requeridos' });
     if (clienteNombre.trim().length < 3) return res.status(400).json({ error: 'Nombre muy corto.' });
 
-    const nuevaCita = await CitasService.crearCitaAdmin(req.negocioId!, req.body);
+    let referenciaUrl: string | undefined;
+    if (req.file) {
+      const upload = await uploadToCloudinary(req.file.buffer, 'referencias_citas');
+      referenciaUrl = upload.url;
+    }
+
+    const nuevaCita = await CitasService.crearCitaAdmin(req.negocioId!, {
+      clienteNombre,
+      clienteTelefono,
+      fecha,
+      horario,
+      zonaDelCuerpo: zonaDelCuerpo || undefined,
+      tamanoEnCm: tamanoEnCm || undefined,
+      duracionEnHoras: duracionEnHoras ? Number(duracionEnHoras) : undefined,
+      cotizacion: cotizacion ? Number(cotizacion) : 0,
+      artistaId: artistaId ? Number(artistaId) : undefined,
+      referenciaUrl,
+    });
     const io = req.app.get('io');
     if (io) {
       io.emit('cambio-citas');

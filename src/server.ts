@@ -21,6 +21,7 @@ import pagosRoutes from './routes/pagos.route';
 import inventarioRoutes from './routes/inventario.route';
 import negocioRoutes from './routes/negocio.route';
 import perfilRoutes from './routes/perfil.routes';
+import recoveryRoutes from './routes/recovery.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -112,6 +113,7 @@ app.use('/api/pagos', pagosRoutes);
 app.use('/api/inventario', inventarioRoutes);
 app.use('/api/negocio', negocioRoutes);
 app.use('/api/perfil', perfilRoutes);
+app.use('/api/recovery', recoveryRoutes);
 // ✅ Fix 2: Socket.IO rooms por negocio para aislamiento de eventos
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);

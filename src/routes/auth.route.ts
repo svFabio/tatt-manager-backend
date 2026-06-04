@@ -3,6 +3,8 @@ import {
     loginConGoogle,
     loginConEmail,
     registrarConEmail,
+    enviarCodigoRegistro,
+    verificarCodigoRegistro,
     me,
     misEstudios,
     seleccionarEstudio,
@@ -18,6 +20,8 @@ const router = Router();
 
 // ── Rutas públicas (sin token) ──
 router.post('/google', loginConGoogle);
+router.post('/register/send-code', enviarCodigoRegistro);
+router.post('/register/verify-code', verificarCodigoRegistro);
 router.post('/register', registrarConEmail);
 router.post('/login', loginConEmail);
 

@@ -6,13 +6,14 @@ import { getAvailableSlots } from './calendarService';
 export interface CrearCitaAdminDTO {
     clienteNombre: string;
     clienteTelefono: string;
-    fecha: string;
-    horario: string;
-    duracionEnHoras?: number | string;
     zonaDelCuerpo?: string;
     tamanoEnCm?: string;
-    cotizacion?: number | string;
+    duracionEnHoras?: number;
+    fecha: string;
+    horario: string;
+    cotizacion: number;
     artistaId?: number;
+    referenciaUrl?: string;
 }
 
 export interface CrearCitaTatuajeDTO {
@@ -132,7 +133,7 @@ export class CitasService {
     }
 
     static async crearCitaAdmin(negocioId: number, data: CrearCitaAdminDTO) {
-        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId } = data;
+        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId, referenciaUrl } = data;
 
         const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
         if (telefonoLimpio.replace(/[^0-9]/g, '').length < 7) throw { status: 400, message: 'El teléfono debe tener al menos 7 dígitos numéricos.' };
@@ -192,6 +193,7 @@ export class CitasService {
                 tamanoEnCm: tamanoEnCm || null,
                 seniaPagada: Number(cotizacion) || 0,
                 artistaId: artistaId || null,
+                referenciaUrl: referenciaUrl || null,
             },
             include: { cliente: true }
         });
