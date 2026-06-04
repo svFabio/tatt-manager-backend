@@ -1,15 +1,21 @@
 import { Request, Response } from 'express';
 import { AuthService, mobileTokenStore } from '../services/auth.service';
+import { VerificationService } from '../services/verificationService';
 
 const asError = (e: unknown): { status?: number; message?: string } =>
     e instanceof Error ? e : (e as { status?: number; message?: string });
 
-/* ── Registro con email ───────────────────────────────────────────── */
+/* ── Registro con email (Requiere código de verificación) ── */
 export const registrarConEmail = async (req: Request, res: Response) => {
     try {
-        const { email, password, nombre } = req.body;
-        if (!email || !password) return res.status(400).json({ error: 'Email y contraseña son requeridos' });
+        const { email, password, nombre, codigo } = req.body;
+        if (!email || !password || !nombre || !codigo) {
+            return res.status(400).json({ error: 'Todos los campos son requeridos, incluyendo el código' });
+        }
         if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
+        // Verificamos y consumimos el código antes de registrar
+        VerificationService.consumirCodigo(email, codigo);
 
         const data = await AuthService.registrarConEmail(email, password, nombre);
         res.status(201).json(data);
@@ -17,6 +23,36 @@ export const registrarConEmail = async (req: Request, res: Response) => {
         console.error('[Auth] Error en registrarConEmail:', error);
         const e = asError(error);
         res.status(e.status || 500).json({ error: e.message || 'Error al registrar la cuenta' });
+    }
+};
+
+/* ── Enviar código de verificación (Registro) ── */
+export const enviarCodigoRegistro = async (req: Request, res: Response) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'El email es requerido' });
+
+        await VerificationService.enviarCodigo(email);
+        res.json({ message: 'Código enviado exitosamente' });
+    } catch (error: unknown) {
+        console.error('[Auth] Error en enviarCodigoRegistro:', error);
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al enviar código' });
+    }
+};
+
+/* ── Verificar código temporal (Registro) ── */
+export const verificarCodigoRegistro = async (req: Request, res: Response) => {
+    try {
+        const { email, codigo } = req.body;
+        if (!email || !codigo) return res.status(400).json({ error: 'Email y código son requeridos' });
+
+        const valido = await VerificationService.verificarCodigo(email, codigo);
+        res.json({ message: 'Código verificado exitosamente', valido });
+    } catch (error: unknown) {
+        console.error('[Auth] Error en verificarCodigoRegistro:', error);
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al verificar código' });
     }
 };
 
