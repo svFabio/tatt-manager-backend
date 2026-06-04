@@ -126,8 +126,8 @@ export const ajusteRapido = async (req: Request, res: Response) => {
   if (!tipo || refId === undefined || delta === undefined) {
     return res.status(400).json({ ok: false, error: 'tipo, refId y delta son requeridos' });
   }
-  if (!['tinta', 'aguja'].includes(tipo)) {
-    return res.status(400).json({ ok: false, error: 'tipo debe ser "tinta" o "aguja"' });
+  if (!['tinta', 'aguja', 'cap'].includes(tipo)) {
+    return res.status(400).json({ ok: false, error: 'tipo debe ser "tinta", "aguja" o "cap"' });
   }
   if (typeof delta !== 'number' || !Number.isInteger(delta) || delta === 0) {
     return res.status(400).json({ ok: false, error: 'delta debe ser un entero distinto de cero' });
