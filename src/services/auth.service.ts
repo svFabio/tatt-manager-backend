@@ -155,7 +155,6 @@ export class AuthService {
 
     /* ── Login con Google Nativo (via idToken) ─────────────────── */
     static async handleNativeGoogleLogin(idToken: string) {
-        const { OAuth2Client } = require('google-auth-library');
         const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
         
         let ticket;
@@ -164,7 +163,7 @@ export class AuthService {
                 idToken,
                 audience: [process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_ANDROID_CLIENT_ID, process.env.GOOGLE_IOS_CLIENT_ID].filter(Boolean) as string[], 
             });
-        } catch (e) {
+        } catch {
             throw { status: 401, message: 'Token de Google inválido' };
         }
         const payload = ticket.getPayload();
