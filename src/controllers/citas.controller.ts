@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import { CitasService } from '../services/citas.service';
 import { getArtistasDelNegocio } from '../services/calendarService';
+import { uploadToCloudinary } from '../services/uploadService';
+
+const asError = (e: unknown): { status?: number; message?: string } =>
+    e instanceof Error ? e : (e as { status?: number; message?: string });
 
 export const getPendientes = async (req: Request, res: Response) => {
   try {
@@ -8,8 +12,8 @@ export const getPendientes = async (req: Request, res: Response) => {
     const artistaId = rol === 'ARTISTA' ? req.usuario?.id : undefined;
     const citas = await CitasService.getPendientes(req.negocioId!, artistaId);
     res.json(citas);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error obteniendo citas' });
+  } catch (error: unknown) {
+    res.status(500).json({ error: (error instanceof Error ? error.message : null) || 'Error obteniendo citas' });
   }
 };
 
@@ -21,9 +25,10 @@ export const validarCita = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error validando cita:", error);
-    res.status(500).json({ error: 'No se pudo procesar la validación' });
+    const e = asError(error);
+    res.status(e.status || 500).json({ error: 'No se pudo procesar la validación' });
   }
 };
 
@@ -44,20 +49,22 @@ export const getResumen = async (req: Request, res: Response) => {
   try {
     const resumen = await CitasService.getResumen(req.negocioId!);
     res.json(resumen);
-  } catch (error) {
-    console.error("Error en resumen:", error);
-    res.status(500).json({ error: 'Error al obtener resumen' });
+  } catch (error: unknown) {
+    res.status(500).json({ error: (error instanceof Error ? error.message : null) || 'Error obteniendo resumen' });
   }
 };
 
 export const getHorariosDisponibles = async (req: Request, res: Response) => {
   try {
     const { fecha, duracion, artistaId } = req.query;
-    if (!fecha) return res.status(400).json({ error: 'Fecha requerida' });
-    const duracionHoras = duracion ? Number(duracion) : 1;
-    const aId = artistaId ? Number(artistaId) : undefined;
-    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, duracionHoras, aId);
-    res.json({ horarios, fecha });
+    if (!fecha || !duracion || !artistaId) {
+      return res.status(400).json({ error: 'Se requieren fecha, duracion y artistaId' });
+    }
+    const d = parseInt(duracion as string) || 1;
+    const aId = parseInt(artistaId as string);
+
+    const horarios = await CitasService.getHorariosDisponibles(req.negocioId!, fecha as string, d, aId);
+    res.json({ horarios });
   } catch (error) {
     console.error("Error obteniendo horarios:", error);
     res.status(500).json({ error: 'Error al obtener horarios disponibles' });
@@ -66,11 +73,30 @@ export const getHorariosDisponibles = async (req: Request, res: Response) => {
 
 export const crearCitaAdmin = async (req: Request, res: Response) => {
   try {
-    const { clienteNombre, clienteTelefono, fecha, horario } = req.body;
+    // FormData envía todo como string — parseamos los campos numéricos explícitamente
+    const { clienteNombre, clienteTelefono, fecha, horario, zonaDelCuerpo, tamanoEnCm, duracionEnHoras, cotizacion, artistaId } = req.body;
+
     if (!clienteNombre || !clienteTelefono || !fecha || !horario) return res.status(400).json({ error: 'Todos los campos son requeridos' });
     if (clienteNombre.trim().length < 3) return res.status(400).json({ error: 'Nombre muy corto.' });
 
-    const nuevaCita = await CitasService.crearCitaAdmin(req.negocioId!, req.body);
+    let referenciaUrl: string | undefined;
+    if (req.file) {
+      const upload = await uploadToCloudinary(req.file.buffer, 'referencias_citas');
+      referenciaUrl = upload.url;
+    }
+
+    const nuevaCita = await CitasService.crearCitaAdmin(req.negocioId!, {
+      clienteNombre,
+      clienteTelefono,
+      fecha,
+      horario,
+      zonaDelCuerpo: zonaDelCuerpo || undefined,
+      tamanoEnCm: tamanoEnCm || undefined,
+      duracionEnHoras: duracionEnHoras ? Number(duracionEnHoras) : undefined,
+      cotizacion: cotizacion ? Number(cotizacion) : 0,
+      artistaId: artistaId ? Number(artistaId) : undefined,
+      referenciaUrl,
+    });
     const io = req.app.get('io');
     if (io) {
       io.emit('cambio-citas');
@@ -86,9 +112,10 @@ export const crearCitaAdmin = async (req: Request, res: Response) => {
       });
     }
     res.status(201).json(nuevaCita);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error creando cita admin:", error);
-    res.status(error.status || 500).json({ error: error.message || 'Error al crear la cita' });
+    const e = asError(error);
+    res.status(e.status || 500).json({ error: e.message || 'Error al crear la cita' });
   }
 };
 
@@ -102,8 +129,9 @@ export const reprogramarCita = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
-  } catch (error: any) {
-    res.status(error.status || 500).json({ error: error.message || 'Error al reprogramar la cita' });
+  } catch (error: unknown) {
+    const e = asError(error);
+    res.status(e.status || 500).json({ error: e.message || 'Error al reprogramar la cita' });
   }
 };
 
@@ -114,8 +142,9 @@ export const marcarNoAsistio = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
-  } catch (error: any) {
-    res.status(error.status || 500).json({ error: error.message || 'Error al actualizar la cita' });
+  } catch (error: unknown) {
+    const e = asError(error);
+    res.status(e.status || 500).json({ error: e.message || 'Error al actualizar la cita' });
   }
 };
 
@@ -126,8 +155,9 @@ export const marcarAsistio = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json(citaActualizada);
-  } catch (error: any) {
-    res.status(error.status || 500).json({ error: error.message || 'Error al actualizar la cita' });
+  } catch (error: unknown) {
+    const e = asError(error);
+    res.status(e.status || 500).json({ error: e.message || 'Error al actualizar la cita' });
   }
 };
 
@@ -135,7 +165,7 @@ export const actualizarDescripcion = async (req: Request, res: Response) => {
   try {
     const citaActualizada = await CitasService.actualizarDescripcion(parseInt(req.params.id), req.negocioId!, req.body.descripcion);
     res.json(citaActualizada);
-  } catch (error: any) {
+  } catch {
     res.status(500).json({ error: 'Error al actualizar descripción' });
   }
 };
@@ -152,9 +182,10 @@ export const crearCitaTatuaje = async (req: Request, res: Response) => {
     if (io) io.emit('cambio-citas');
 
     res.status(201).json({ data: nuevaCita, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creando cita de tatuaje:', error);
-    res.status(error.status || 500).json({ data: null, error: error.message || 'Error al crear la cita' });
+    const e = asError(error);
+    res.status(e.status || 500).json({ data: null, error: e.message || 'Error al crear la cita' });
   }
 };
 
@@ -169,7 +200,7 @@ export const getDisponibilidad = async (req: Request, res: Response) => {
 
     const slots = await CitasService.getDisponibilidad(req.negocioId!, parseInt(artistaId as string), fecha as string, duracion);
     res.json({ data: { fecha, artistaId: parseInt(artistaId as string), duracionEnHoras: duracion, slots }, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error obteniendo disponibilidad:', error);
     res.status(500).json({ data: null, error: 'Error al obtener disponibilidad' });
   }
@@ -181,9 +212,10 @@ export const confirmarCita = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json({ data: citaActualizada, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error confirmando cita:', error);
-    res.status(error.status || 500).json({ data: null, error: error.message || 'Error al confirmar cita' });
+    const e = asError(error);
+    res.status(e.status || 500).json({ data: null, error: e.message || 'Error al confirmar cita' });
   }
 };
 
@@ -193,9 +225,24 @@ export const cancelarCita = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) io.emit('cambio-citas');
     res.json({ data: citaActualizada, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error cancelando cita:', error);
-    res.status(error.status || 500).json({ data: null, error: error.message || 'Error al cancelar cita' });
+    const e = asError(error);
+    res.status(e.status || 500).json({ data: null, error: e.message || 'Error al cancelar cita' });
+  }
+};
+
+export const getCargaHoraria = async (req: Request, res: Response) => {
+  try {
+    const { artistaId, fecha } = req.query;
+    if (!artistaId || !fecha) {
+      return res.status(400).json({ data: null, error: 'artistaId y fecha son requeridos' });
+    }
+    const data = await CitasService.getCargaHoraria(req.negocioId!, parseInt(artistaId as string), fecha as string);
+    res.json({ data, error: null });
+  } catch (error: unknown) {
+    console.error('Error obteniendo carga horaria:', error);
+    res.status(500).json({ data: null, error: 'Error al obtener carga horaria' });
   }
 };
 

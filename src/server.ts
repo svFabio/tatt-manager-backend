@@ -1,6 +1,5 @@
-
 import 'dotenv/config';
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -21,6 +20,8 @@ import agujasRoutes from './routes/agujas.route';
 import pagosRoutes from './routes/pagos.route';
 import inventarioRoutes from './routes/inventario.route';
 import negocioRoutes from './routes/negocio.route';
+import perfilRoutes from './routes/perfil.routes';
+import recoveryRoutes from './routes/recovery.route';
 import {
     iniciarWhatsAppNegocio,
     getEstadoWhatsApp,
@@ -72,26 +73,25 @@ app.use((req, res, next) => {
 });
 app.get('/', (_req, res) => res.send('Backend funcionando 🚀'));
 app.get('/ping', (_req, res) => res.send('pong'));
-const mockTenantMiddleware = (req: Request, res: Response, next: NextFunction) => { req.negocioId = 1; next(); };
-
-app.get('/api/status-whatsapp', mockTenantMiddleware, (req, res) => {
+// ✅ Fix 1: Rutas de WhatsApp protegidas con autenticación real
+app.get('/api/status-whatsapp', verificarToken, tenantMiddleware, (req, res) => {
     const estado = getEstadoWhatsApp(req.negocioId!);
     res.json({ ...estado, botsActivos: getBotsActivos() });
 });
-app.post('/api/start-whatsapp', mockTenantMiddleware, async (req, res) => {
+app.post('/api/start-whatsapp', verificarToken, tenantMiddleware, async (req, res) => {
     const resultado = await iniciarWhatsAppNegocio(req.negocioId!, io);
     if (resultado.error) return res.status(429).json({ error: resultado.error });
     res.json({ message: 'Bot iniciando. Espera el QR.' });
 });
-app.post('/api/logout', mockTenantMiddleware, async (req, res) => {
+app.post('/api/logout', verificarToken, tenantMiddleware, async (req, res) => {
     const resultado = await desvincularWhatsApp(req.negocioId!);
     res.json(resultado);
 });
-app.post('/api/restart-whatsapp', mockTenantMiddleware, async (req, res) => {
+app.post('/api/restart-whatsapp', verificarToken, tenantMiddleware, async (req, res) => {
     const resultado = await reiniciarWhatsApp(req.negocioId!, io);
     res.json(resultado);
 });
-app.post('/api/pairing-code', mockTenantMiddleware, async (req, res) => {
+app.post('/api/pairing-code', verificarToken, tenantMiddleware, async (req, res) => {
     const { telefono } = req.body;
     if (!telefono) return res.status(400).json({ error: 'El numero de telefono es requerido' });
     const resultado = await solicitarCodigoPairing(req.negocioId!, telefono, io);
@@ -101,8 +101,8 @@ app.post('/api/pairing-code', mockTenantMiddleware, async (req, res) => {
 app.use('/api/citas', citasRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/configuracion', configuracionRoutes);
-app.use('/api/statistics', statisticsRoutes);
-app.use('/api/users', usersRoutes);
+app.use('/api/statistics', statisticsRoutes); // 📊 Ruta de Estadísticas activa
+app.use('/api/users', usersRoutes);             // 👤 Ruta de Perfil / Usuarios activa
 app.use('/api/chat', chatRoutes);
 app.use('/api/clientes', clientesRoutes);
 app.use('/api/solicitudes', solicitudesRoutes);
@@ -112,14 +112,26 @@ app.use('/api/agujas', agujasRoutes);
 app.use('/api/pagos', pagosRoutes);
 app.use('/api/inventario', inventarioRoutes);
 app.use('/api/negocio', negocioRoutes);
+app.use('/api/perfil', perfilRoutes);
+app.use('/api/recovery', recoveryRoutes);
+// ✅ Fix 2: Socket.IO rooms por negocio para aislamiento de eventos
 io.on('connection', (socket) => {
     console.log('⚡ Cliente conectado al Socket:', socket.id);
+    socket.on('join-negocio', (negocioId: number) => {
+        const room = `negocio-${negocioId}`;
+        socket.join(room);
+        console.log(`[Socket] ${socket.id} se unió al room ${room}`);
+    });
+    socket.on('leave-negocio', (negocioId: number) => {
+        socket.leave(`negocio-${negocioId}`);
+        console.log(`[Socket] ${socket.id} salió del room negocio-${negocioId}`);
+    });
 });
 httpServer.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`🚀 Servidor listo en puerto ${PORT}`);
     iniciarCronJobs();
     iniciarRecordatorios();
     iniciarSurvey();
-    iniciarWhatsApp(io); // <--- Auto-conecta todos los bots
+    iniciarWhatsApp(io); 
 });
 export default app;

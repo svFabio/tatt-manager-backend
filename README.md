@@ -1,68 +1,73 @@
-# Backend - Tatt Manager 🦇
+# Tatt Studio - Backend
 
-Servicio backend de alto rendimiento para la gestión integral de estudios de tatuaje. Orquesta citas, automatiza confirmaciones mediante WhatsApp y ofrece inteligencia artificial nativa para atender clientes sin intervención humana.
+Servicio backend para la gestión de estudios de tatuaje. Controla las citas, la integración con WhatsApp, la inteligencia artificial (Gemini) y la pasarela de autenticación y correos.
 
-## System Architecture
+## Requisitos Previos
+* Node.js (v18 o superior)
+* PostgreSQL (corriendo localmente o en la nube como NeonDB)
 
-<img width="1219" height="651" alt="image" src="https://github.com/user-attachments/assets/19d75cbf-06c9-496e-9813-15dea1e0fcdf" />
+## Guía de Instalación Rápida
 
-### Communication & Auth Flow
-<img width="1114" height="817" alt="image" src="https://github.com/user-attachments/assets/0e72e5eb-e711-4205-af5a-c136f003f5ab" />
-<img width="882" height="849" alt="image" src="https://github.com/user-attachments/assets/252cf2b0-ad90-4553-9bf7-4644f1abd473" />
+Sigue estos pasos detallados para levantar el servidor localmente:
 
-## Instilación Local (Quick Start)
+### 1. Instalar dependencias
+Abre la terminal en la carpeta `tatt-manager-backend` y ejecuta:
+```bash
+npm install
+```
 
-1. **Clonar e instalar dependencias:**
-   ```bash
-   git clone <repository-url>
-   cd tatt-manager-backend
-   npm install
-   ```
+### 2. Configurar Variables de Entorno
+Crea un archivo llamado `.env` en la raíz de la carpeta `tatt-manager-backend`. Es **obligatorio** que cuente con todas estas variables para que el sistema no falle. Copia y pega esta plantilla:
 
-2. **Configurar Entorno (`.env`):**
-   ```env
-   DATABASE_URL="postgresql://user:password@hostname:5432/tatt_manager_db"
-   PORT=3000
-   JWT_SECRET="super_secret_jwt_key_here"
-   
-   # Cloudinary (Imágenes y Comprobantes)
-   CLOUDINARY_CLOUD_NAME="your_cloud_name"
-   CLOUDINARY_API_KEY="your_api_key"
-   CLOUDINARY_API_SECRET="your_api_secret"
-   
-   # Google Gemini (Inteligencia Artificial)
-   GEMINI_API_KEY="your_gemini_api_key"
-   
-   # Google OAuth (Autenticación Móvil)
-   GOOGLE_CLIENT_ID="your_google_client_id"
-   GOOGLE_CLIENT_SECRET="your_google_client_secret"
-   ```
+```env
+# Base de Datos (PostgreSQL)
+DATABASE_URL="postgresql://usuario:password@host:5432/dbname?sslmode=require"
+DIRECT_URL="postgresql://usuario:password@host:5432/dbname?sslmode=require" # Necesario si usas Pooler como NeonDB
 
-3. **Base de Datos & Prisma:**
-   Asegúrate de aplicar el modelo relacional actual:
-   ```bash
-   npx prisma generate
-   npx prisma db push
-   ```
+# Configuración del Servidor
+PORT=3000
+BACKEND_URL="http://192.168.1.X:3000" # Tu IP local para callbacks
 
-4. **Arrancar en Modo Desarrollo:**
-   ```bash
-   npm run dev
-   ```
+# Seguridad
+JWT_SECRET="super_secret_key"
 
-## Estructura Core
+# Cloudinary (Para subir imágenes/comprobantes)
+CLOUDINARY_CLOUD_NAME="tu_cloud_name"
+CLOUDINARY_API_KEY="tu_api_key"
+CLOUDINARY_API_SECRET="tu_api_secret"
 
-- **`src/controllers/`**: Maneja el enrutamiento HTTP (Citas, Auth, Statistics, WhatsApp).
-- **`src/services/`**: Lógica de negocio dura.
-  - `whatsappClient.ts`: Motor de Baileys para control de sesión de WhatsApp.
-  - `citas.service.ts`: Abstracción relacional del agendamiento y disponibilidad.
-- **`src/middleware/`**: Seguridad. Envolturas de JWT (`auth.middleware.ts`) para proteger los endpoints.
-- **`prisma/schema.prisma`**: Corazón transaccional. (Clientes, Citas, Usuarios, Pagos, Solicitudes).
+# Inteligencia Artificial
+GEMINI_API_KEY="tu_api_key_de_gemini"
 
-## Seguridad
-- Todas las rutas clave requieren token JWT válido.
-- Bloqueo por Rate Limiting (500 req/15min).
-- Prevención básica con capa de Helmet y CORS.
+# Google OAuth (Autenticación)
+GOOGLE_CLIENT_ID="tu_client_id_web"
+GOOGLE_CLIENT_SECRET="tu_client_secret"
+GOOGLE_ANDROID_CLIENT_ID="tu_client_id_android"
 
----
-*Si modificas la base de datos, no olvides correr `npx prisma generate` antes de ejecutar compilaciones.*
+# Configuración SMTP (Para envío de correos)
+SMTP_EMAIL="tu_correo@gmail.com"
+SMTP_PASSWORD="tu_password_de_aplicacion"
+```
+
+### 3. Sincronizar Base de Datos (Prisma)
+Una vez configurado el `.env`, prepara tu base de datos:
+```bash
+# Generar el cliente de Prisma
+npx prisma generate
+
+# Empujar el esquema a la base de datos
+npx prisma db push
+```
+
+*(Opcional) Si necesitas datos de prueba, puedes ejecutar el script de seed:*
+```bash
+npx ts-node seed_test_data.ts
+```
+
+### 4. Levantar el Servidor
+Inicia el entorno de desarrollo:
+```bash
+npm run dev
+```
+
+El backend estará disponible en el puerto definido (por defecto `http://localhost:3000`).

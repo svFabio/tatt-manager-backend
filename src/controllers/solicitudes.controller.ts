@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Prisma, EstadoSolicitud } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from '../services/whatsappClient';
 export const getSolicitudes = async (req: Request, res: Response) => {
@@ -7,9 +8,9 @@ export const getSolicitudes = async (req: Request, res: Response) => {
   const rol = req.estudioActivo?.rol;
   const usuarioId = req.usuario?.id;
   try {
-    const where: any = { negocioId };
+    const where: Prisma.SolicitudWhereInput = { negocioId };
     if (estado && ['PENDIENTE', 'COTIZADA', 'RECHAZADA'].includes(estado as string)) {
-      where.estado = estado as string;
+      where.estado = estado as EstadoSolicitud;
     }
     // ARTISTA solo ve solicitudes asignadas a él
     if (rol === 'ARTISTA' && usuarioId) {
@@ -113,7 +114,7 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
 
       const jid = ultimoMensaje ? ultimoMensaje.remoteJid : `${numero}@s.whatsapp.net`;
 
-      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: $${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
+      let mensaje = `Hola ${solicitudActualizada.cliente.nombre},\n\nTu solicitud de tatuaje ha sido revisada.\n💰 Costo total: Bs. ${precioCotizado}\n⏱️ Tiempo estimado: ${horasEstimadas} horas\n`;
       if (mensajePersonalizado) {
         mensaje += `\n💬 *Mensaje del estudio:* ${mensajePersonalizado}\n`;
       }
@@ -130,10 +131,10 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
           artistaNombre: solicitudActualizada.artista?.nombre || 'el artista asignado'
         };
 
-        const sesionExistente = await prisma.sesionChat.findUnique({ where: { id: jid } });
+        const sesionExistente = await prisma.sesionChat.findUnique({ where: { id_negocioId: { id: jid, negocioId } } });
         if (sesionExistente) {
           await prisma.sesionChat.update({
-            where: { id: jid },
+            where: { id_negocioId: { id: jid, negocioId } },
             data: { estado: 'ESPERANDO_FECHA', datos: datosSesion, ultimoMensaje: new Date() }
           });
         } else {
@@ -150,9 +151,10 @@ export const cotizarSolicitud = async (req: Request, res: Response) => {
     }
 
     res.json({ data: solicitudActualizada, error: null, mensajeEnviado: true });
-  } catch (error: any) {
-    console.error('Error cotizando solicitud:', error?.message || error);
-    console.error('Stack:', error?.stack);
+  } catch (error: unknown) {
+    const e = error as { message?: string; stack?: string };
+    console.error('Error cotizando solicitud:', e.message || error);
+    console.error('Stack:', e.stack);
     res.status(500).json({ data: null, error: 'Error al cotizar solicitud' });
   }
 };

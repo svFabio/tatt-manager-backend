@@ -1,1 +1,3 @@
-import cron from 'node-cron';export const iniciarRecordatorios = () => {    console.log('[Cron] ⏰ Sistema de recordatorios DESACTIVADO por desarrollo.');};
+export const iniciarRecordatorios = () => {
+    console.log('[Cron] ⏰ Sistema de recordatorios DESACTIVADO por desarrollo.');
+};

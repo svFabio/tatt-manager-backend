@@ -5,8 +5,8 @@ import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import { Server } from 'socket.io';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import * as fs from 'fs';
-import * as path from 'path';
+// import * as fs from 'fs';
+// import * as path from 'path';
 
 // --- Configuración de IA (Gemini) ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');

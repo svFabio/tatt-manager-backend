@@ -1,17 +1,19 @@
+import { EstadoCita, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { enviarMensaje } from './whatsappClient';
-import { getAvailableSlots, getBusinessHours } from './calendarService';
+import { getAvailableSlots } from './calendarService';
 
 export interface CrearCitaAdminDTO {
     clienteNombre: string;
     clienteTelefono: string;
-    fecha: string;
-    horario: string;
-    duracionEnHoras?: number | string;
     zonaDelCuerpo?: string;
     tamanoEnCm?: string;
-    cotizacion?: number | string;
+    duracionEnHoras?: number;
+    fecha: string;
+    horario: string;
+    cotizacion: number;
     artistaId?: number;
+    referenciaUrl?: string;
 }
 
 export interface CrearCitaTatuajeDTO {
@@ -28,7 +30,7 @@ export interface CrearCitaTatuajeDTO {
 
 export class CitasService {
     static async getPendientes(negocioId: number, artistaId?: number) {
-        const whereClause: any = { negocioId, estadoCita: 'PENDIENTE' };
+        const whereClause: Prisma.CitaWhereInput = { negocioId, estadoCita: EstadoCita.PENDIENTE };
         if (artistaId) whereClause.artistaId = artistaId;
         return await prisma.cita.findMany({
             where: whereClause,
@@ -88,10 +90,10 @@ export class CitasService {
             fechaHasta.setUTCHours(23, 59, 59, 999);
         }
         
-        const whereClause: any = {
+        const whereClause: Prisma.CitaWhereInput = {
             negocioId,
             fechaHoraInicio: { gte: fechaDesde, lte: fechaHasta },
-            estadoCita: { not: 'CANCELADA' }
+            estadoCita: { not: EstadoCita.CANCELADA }
         };
         if (artistaId) whereClause.artistaId = artistaId;
 
@@ -131,7 +133,7 @@ export class CitasService {
     }
 
     static async crearCitaAdmin(negocioId: number, data: CrearCitaAdminDTO) {
-        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId } = data;
+        const { clienteNombre, clienteTelefono, fecha, horario, duracionEnHoras: durInput, zonaDelCuerpo, tamanoEnCm, cotizacion, artistaId, referenciaUrl } = data;
 
         const telefonoLimpio = clienteTelefono.replace(/[^0-9+]/g, '');
         if (telefonoLimpio.replace(/[^0-9]/g, '').length < 7) throw { status: 400, message: 'El teléfono debe tener al menos 7 dígitos numéricos.' };
@@ -152,7 +154,7 @@ export class CitasService {
         fechaFin.setHours(fechaFin.getHours() + duracion);
 
         let cliente = await prisma.cliente.findUnique({
-            where: { numeroWhatsapp: telefonoLimpio }
+            where: { numeroWhatsapp_negocioId: { numeroWhatsapp: telefonoLimpio, negocioId } }
         });
 
         if (!cliente) {
@@ -171,12 +173,20 @@ export class CitasService {
         const citaSolapada = await prisma.cita.findFirst({
             where: {
                 negocioId,
+                ...(artistaId ? { artistaId } : {}),
                 estadoCita: { not: 'CANCELADA' },
                 fechaHoraInicio: { lt: fechaFin },
                 fechaHoraFin: { gt: fechaCita },
             }
         });
-        if (citaSolapada) throw { status: 409, message: 'Este horario se solapa con otra cita existente.' };
+        if (citaSolapada) throw { status: 409, message: 'Este horario se solapa con otra cita existente para este artista.' };
+
+        if (artistaId) {
+            const carga = await CitasService.getCargaHoraria(negocioId, artistaId, fecha);
+            if (carga.horasAgendadas + duracion > 8) {
+                throw { status: 422, message: `El artista ya tiene ${carga.horasAgendadas}h agendadas ese día. Agregar ${duracion}h superaría el límite de 8h diarias.` };
+            }
+        }
 
         return await prisma.cita.create({
             data: {
@@ -190,6 +200,7 @@ export class CitasService {
                 tamanoEnCm: tamanoEnCm || null,
                 seniaPagada: Number(cotizacion) || 0,
                 artistaId: artistaId || null,
+                referenciaUrl: referenciaUrl || null,
             },
             include: { cliente: true }
         });
@@ -265,6 +276,12 @@ export class CitasService {
         });
         if (citaSolapada) throw { status: 409, message: `El artista tiene una cita que se solapa (Cita #${citaSolapada.id})` };
 
+        const fechaSolo = inicio.toISOString().split('T')[0];
+        const carga = await CitasService.getCargaHoraria(negocioId, artistaId, fechaSolo);
+        if (carga.horasAgendadas + duracionEnHoras > 8) {
+            throw { status: 422, message: `El artista ya tiene ${carga.horasAgendadas}h agendadas ese día. Agregar ${duracionEnHoras}h superaría el límite de 8h diarias.` };
+        }
+
         return await prisma.cita.create({
             data: {
                 negocioId, fechaHoraInicio: inicio, fechaHoraFin: fin, duracionEnHoras, tipoCita, estadoCita: 'PENDIENTE',
@@ -315,6 +332,51 @@ export class CitasService {
             }
         }
         return slots;
+    }
+
+    static async getCargaHoraria(negocioId: number, artistaId: number, fecha: string) {
+        const LIMITE_HORAS_DIA = 8;
+        const [year, month, day] = fecha.split('-').map(Number);
+        const inicioDia = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const finDia = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+        const citas = await prisma.cita.findMany({
+            where: {
+                negocioId,
+                artistaId,
+                estadoCita: { in: ['PENDIENTE', 'CONFIRMADA'] },
+                fechaHoraInicio: { gte: inicioDia, lte: finDia },
+            },
+            select: {
+                id: true,
+                fechaHoraInicio: true,
+                fechaHoraFin: true,
+                duracionEnHoras: true,
+                estadoCita: true,
+                cliente: { select: { nombre: true } },
+            },
+            orderBy: { fechaHoraInicio: 'asc' },
+        });
+
+        const horasAgendadas = citas.reduce((sum, c) => sum + Number(c.duracionEnHoras ?? 0), 0);
+        const horasLibres = Math.max(0, LIMITE_HORAS_DIA - horasAgendadas);
+
+        return {
+            artistaId,
+            fecha,
+            horasAgendadas: Math.round(horasAgendadas * 10) / 10,
+            horasLibres: Math.round(horasLibres * 10) / 10,
+            limiteDiario: LIMITE_HORAS_DIA,
+            excedido: horasAgendadas > LIMITE_HORAS_DIA,
+            citas: citas.map(c => ({
+                id: c.id,
+                clienteNombre: c.cliente?.nombre ?? null,
+                fechaHoraInicio: c.fechaHoraInicio,
+                fechaHoraFin: c.fechaHoraFin,
+                duracionEnHoras: Number(c.duracionEnHoras ?? 0),
+                estadoCita: c.estadoCita,
+            })),
+        };
     }
 
     static async cambiarEstadoNuevo(id: number, negocioId: number, estadoFaltante: string) {

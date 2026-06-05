@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router } from 'express';
 import {
     getPendientes,
     validarCita,
@@ -14,18 +14,19 @@ import {
     getDisponibilidad,
     confirmarCita,
     cancelarCita,
-    getArtistasDisponibles
+    getArtistasDisponibles,
+    getCargaHoraria
 } from '../controllers/citas.controller';
 import {
     listarSolicitudes,
     listarCitasPorEstado,
     obtenerDetalleCita
 } from '../controllers/listarCitas.controller';
-
-const router = Router();
-
 import { verificarToken } from '../middleware/auth.middleware';
 import { tenantMiddleware } from '../middleware/tenant.middleware';
+import { uploadFoto } from '../middleware/upload.middleware';
+
+const router = Router();
 
 router.use(verificarToken, tenantMiddleware);
 
@@ -34,13 +35,14 @@ router.get('/artistas', getArtistasDisponibles);
 router.get('/pendientes', getPendientes);
 router.get('/resumen', getResumen);
 router.get('/horarios-disponibles', getHorariosDisponibles);
-router.post('/admin', crearCitaAdmin);
+router.post('/admin', uploadFoto, crearCitaAdmin);
 router.post('/:id/validar', validarCita);
 router.put('/:id/reprogramar', reprogramarCita);
 router.put('/:id/no-asistio', marcarNoAsistio);
 router.put('/:id/asistio', marcarAsistio);
 router.put('/:id/descripcion', actualizarDescripcion);
 router.get('/disponibilidad', getDisponibilidad);
+router.get('/carga-horaria', getCargaHoraria);
 router.post('/nueva', crearCitaTatuaje);
 router.patch('/:id/confirmar', confirmarCita);
 router.patch('/:id/cancelar', cancelarCita);

@@ -3,6 +3,8 @@ import {
     loginConGoogle,
     loginConEmail,
     registrarConEmail,
+    enviarCodigoRegistro,
+    verificarCodigoRegistro,
     me,
     misEstudios,
     seleccionarEstudio,
@@ -11,6 +13,7 @@ import {
     googleMobileStart,
     googleMobileCallback,
     mobileTokenPoll,
+    googleNativeLogin,
 } from '../controllers/auth.controller';
 import { verificarToken } from '../middleware/auth.middleware';
 
@@ -18,10 +21,13 @@ const router = Router();
 
 // ── Rutas públicas (sin token) ──
 router.post('/google', loginConGoogle);
+router.post('/register/send-code', enviarCodigoRegistro);
+router.post('/register/verify-code', verificarCodigoRegistro);
 router.post('/register', registrarConEmail);
 router.post('/login', loginConEmail);
 
 // ── Google Mobile OAuth ──
+router.post('/google-native', googleNativeLogin);
 router.get('/google-mobile', googleMobileStart);
 router.get('/mobile-callback', googleMobileCallback);
 router.get('/mobile-token', mobileTokenPoll);

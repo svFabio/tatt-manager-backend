@@ -57,7 +57,7 @@ export async function descontarCaps(
     if (stock.cantidadActual < mlUsados) {
       throw {
         status: 400,
-        message: `Stock insuficiente para "${stock.tinta.nombre}" (${stock.tinta.color}): disponible ${stock.cantidadActual} ml, necesario ${mlUsados} ml (por ${cap.cantidadUsada} cap(s) ${cap.tamanioCap})`,
+        message: `Stock insuficiente para "${stock.tinta.nombre}": disponible ${stock.cantidadActual} ml, necesario ${mlUsados} ml (por ${cap.cantidadUsada} cap(s) ${cap.tamanioCap})`,
       };
     }
     await tx.stockTinta.update({

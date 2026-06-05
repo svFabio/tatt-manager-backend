@@ -2,8 +2,9 @@ generator client {
   provider = "prisma-client-js"
 }
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 enum Rol {
   ADMIN
@@ -17,12 +18,18 @@ enum EstadoSolicitud {
   PENDIENTE
   COTIZADA
   RECHAZADA
+  ESPERANDO_COMPROBANTE
 }
 enum EstadoCita {
   PENDIENTE
   CONFIRMADA
   FINALIZADA
   CANCELADA
+}
+enum EstadoPago {
+  PENDIENTE_VALIDACION
+  APROBADO
+  RECHAZADO
 }
 enum TipoMovimiento {
   ENTRADA
@@ -60,6 +67,8 @@ model Usuario {
   email         String   @unique
   password      String   @default("")
   googleId      String?  @unique
+  fotoUrl       String?
+  fotoPublicId  String?
   authProvider  String   @default("email")
   creadoEn      DateTime @default(now())
   membresias    MiembroEstudio[]
@@ -86,12 +95,13 @@ model BaileysSession {
   keys  String @db.Text
 }
 model SesionChat {
-  id            String   @id 
+  id            String
   estado        String
   datos         Json
   ultimoMensaje DateTime @default(now())
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
+  negocioId     Int
+  negocio       Negocio  @relation(fields: [negocioId], references: [id])
+  @@id([id, negocioId])
   @@index([negocioId, ultimoMensaje])
 }
 model Cita {
@@ -111,6 +121,7 @@ model Cita {
   estiloDeTatuaje  String?
   zonaDelCuerpo    String?
   tamanoEnCm       String?
+  referenciaUrl    String?
   seniaPagada      Decimal    @default(0) @db.Decimal(10, 2)
   creadoEn        DateTime @default(now())
   negocioId   Int
@@ -145,8 +156,11 @@ model Configuracion {
   mensajeBienvenida   String @default("Hola! Soy el asistente de citas. Cual es tu nombre completo?")
   mensajeConfirmacion String @default("Comprobante recibido! Tu cita esta siendo revisada. Te confirmamos pronto.")
   servicios           Json   @default("[{\"nombre\":\"Servicio\",\"precio\":0}]")
-  horarios            Json   @default("{\"lunes\":[\"09:00\",\"10:00\",\"11:00\",\"12:00\"],\"martes\":[\"09:00\",\"10:00\",\"11:00\",\"12:00\"],\"miercoles\":[\"09:00\",\"10:00\",\"11:00\",\"12:00\"],\"jueves\":[\"09:00\",\"10:00\",\"11:00\",\"12:00\"],\"viernes\":[\"09:00\",\"10:00\",\"11:00\",\"12:00\"],\"sabado\":[],\"domingo\":[]}")
+  horarios            Json   @default("{\"lunes\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"martes\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"miercoles\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"jueves\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"viernes\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"sabado\":[\"07:00\",\"08:00\",\"09:00\",\"10:00\",\"11:00\",\"12:00\",\"13:00\",\"14:00\",\"15:00\",\"16:00\",\"17:00\",\"18:00\",\"19:00\",\"20:00\",\"21:00\",\"22:00\"],\"domingo\":[]}")
   qrContenido         String  @default("TU_CODIGO_QR_AQUI")
+  qrContenido_publicId    String?
+  horaApertura        String  @default("09:00")
+  horaCierre          String  @default("21:00")
   cobrarAdelanto      Boolean @default(true)
   porcentajeAdelanto  Int     @default(50)
   negocioId Int     @unique
@@ -155,15 +169,16 @@ model Configuracion {
 model Cliente {
   id             Int      @id @default(autoincrement())
   nombre         String
-  numeroWhatsapp String   @unique
+  numeroWhatsapp String
   creadoEn       DateTime @default(now())
-  negocioId Int
-  negocio   Negocio @relation(fields: [negocioId], references: [id])
-  solicitudes Solicitud[]
-  citas       Cita[]
-  registros   RegistroSesion[]
-  pagos       Pago[]
-  mensajes    MensajeChat[]
+  negocioId      Int
+  negocio        Negocio  @relation(fields: [negocioId], references: [id])
+  solicitudes    Solicitud[]
+  citas          Cita[]
+  registros      RegistroSesion[]
+  pagos          Pago[]
+  mensajes       MensajeChat[]
+  @@unique([numeroWhatsapp, negocioId])
 }
 model Solicitud {
   id                Int             @id @default(autoincrement())
@@ -265,9 +280,11 @@ model HistorialInventario {
 }
 model Pago {
   id                 Int      @id @default(autoincrement())
-  monto              Decimal  @db.Decimal(10, 2)
+  monto              Decimal    @db.Decimal(10, 2)
   fotoComprobanteUrl String?
-  registradoEn       DateTime @default(now())
+  estadoValidacion   EstadoPago @default(PENDIENTE_VALIDACION)
+  expiradoEn         DateTime?
+  registradoEn       DateTime   @default(now())
   negocioId       Int
   negocio         Negocio @relation(fields: [negocioId], references: [id])
   clienteId       Int

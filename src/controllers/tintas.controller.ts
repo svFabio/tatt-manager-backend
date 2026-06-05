@@ -66,7 +66,7 @@ export const editarTinta = async (req: Request, res: Response) => {
     if (!tinta) {
       return res.status(404).json({ data: null, error: 'Tinta no encontrada' });
     }
-    const updateData: any = {};
+    const updateData: Record<string, unknown> = {};
     if (nombre !== undefined) updateData.nombre = nombre.trim();
     if (marca !== undefined) updateData.marca = marca.trim();
     if (color !== undefined) updateData.color = color.trim();
@@ -121,10 +121,11 @@ export const entradaStockTinta = async (req: Request, res: Response) => {
     }
     const resultado = await entradaStock(parseInt(id), tamanioCap, cantidad, usuarioId, motivo);
     res.json({ data: resultado, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error en entrada de stock:', error);
-    if (error.status) {
-      return res.status(error.status).json({ data: null, error: error.message });
+    const e = error as { status?: number; message?: string };
+    if (e.status) {
+      return res.status(e.status).json({ data: null, error: e.message });
     }
     res.status(500).json({ data: null, error: 'Error al registrar entrada de stock' });
   }
@@ -145,10 +146,11 @@ export const ajusteStockTinta = async (req: Request, res: Response) => {
     }
     const resultado = await ajusteStock(parseInt(id), tamanioCap, cantidad, usuarioId, motivo.trim());
     res.json({ data: resultado, error: null });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error en ajuste de stock:', error);
-    if (error.status) {
-      return res.status(error.status).json({ data: null, error: error.message });
+    const e = error as { status?: number; message?: string };
+    if (e.status) {
+      return res.status(e.status).json({ data: null, error: e.message });
     }
     res.status(500).json({ data: null, error: 'Error al ajustar stock' });
   }

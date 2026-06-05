@@ -10,7 +10,7 @@ const CAP_LABEL: Record<string, string> = {
 };
 
 type ItemInventario = {
-  tipo: 'tinta' | 'aguja';
+  tipo: 'tinta' | 'aguja' | 'cap';
   refId: number;
   nombre: string;
   marca: string;
@@ -22,7 +22,24 @@ type ItemInventario = {
   fotoUrl?: string;
 };
 
-function normalizarTinta(stock: any): ItemInventario {
+interface StockTintaRow {
+  id: number;
+  cantidadActual: number;
+  cantidadMinima: number;
+  tamanioCap: string;
+  tinta: { nombre: string; marca: string; colorHex: string | null };
+}
+
+interface AgujaRow {
+  id: number;
+  nombre: string;
+  marca: string;
+  categoria: string;
+  cantidadActual: number;
+  cantidadMinima: number;
+}
+
+function normalizarTinta(stock: StockTintaRow): ItemInventario {
   return {
     tipo: 'tinta',
     refId: stock.id,
@@ -36,9 +53,9 @@ function normalizarTinta(stock: any): ItemInventario {
   };
 }
 
-function normalizarAguja(aguja: any): ItemInventario {
+function normalizarAguja(aguja: AgujaRow): ItemInventario {
   return {
-    tipo: 'aguja',
+    tipo: aguja.categoria.toLowerCase() as 'tinta' | 'aguja' | 'cap',
     refId: aguja.id,
     nombre: aguja.nombre,
     marca: aguja.marca,
@@ -109,8 +126,8 @@ export const ajusteRapido = async (req: Request, res: Response) => {
   if (!tipo || refId === undefined || delta === undefined) {
     return res.status(400).json({ ok: false, error: 'tipo, refId y delta son requeridos' });
   }
-  if (!['tinta', 'aguja'].includes(tipo)) {
-    return res.status(400).json({ ok: false, error: 'tipo debe ser "tinta" o "aguja"' });
+  if (!['tinta', 'aguja', 'cap'].includes(tipo)) {
+    return res.status(400).json({ ok: false, error: 'tipo debe ser "tinta", "aguja" o "cap"' });
   }
   if (typeof delta !== 'number' || !Number.isInteger(delta) || delta === 0) {
     return res.status(400).json({ ok: false, error: 'delta debe ser un entero distinto de cero' });
@@ -165,16 +182,16 @@ export const ajusteRapido = async (req: Request, res: Response) => {
     const resultado = await ajusteRapidoAguja(parseInt(refId), negocioId, delta, usuarioId);
     const item = normalizarAguja(resultado.aguja);
     return res.json({ ok: true, data: item });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error en ajuste rápido:', error);
-    const status = error.status ?? 500;
-    res.status(status).json({ ok: false, error: error.message ?? 'Error al ajustar stock' });
+    const e = error as { status?: number; message?: string };
+    const status = e.status ?? 500;
+    res.status(status).json({ ok: false, error: e.message ?? 'Error al ajustar stock' });
   }
 };
 
 const CATEGORIAS_VALIDAS = ['TINTA', 'AGUJA', 'CAP'] as const;
 
-const CAP_TAMANIOS = ['CHICA', 'MEDIANA', 'GRANDE'] as const;
 
 export const crearInsumo = async (req: Request, res: Response) => {
   const negocioId = req.negocioId!;
@@ -259,7 +276,7 @@ export const crearInsumo = async (req: Request, res: Response) => {
 
     const item: ItemInventario = normalizarAguja(aguja);
     return res.status(201).json({ ok: true, data: [item] });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creando insumo:', error);
     res.status(500).json({ ok: false, error: 'Error al guardar el ítem' });
   }
@@ -303,7 +320,7 @@ export const editarInsumo = async (req: Request, res: Response) => {
       // If they send "Black Ink · Cap M", we extract "Black Ink"
       const baseNombre = nombre.split(' · ')[0].trim();
 
-      const [updatedTinta, updatedStock] = await prisma.$transaction([
+      const [, updatedStock] = await prisma.$transaction([
         prisma.tinta.update({
           where: { id: stock.tintaId },
           data: {

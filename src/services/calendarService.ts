@@ -1,3 +1,4 @@
+import { EstadoCita, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 export interface BusinessHours {
@@ -32,10 +33,18 @@ const minutesToTime = (totalMinutes: number): string => {
 export const getBusinessHours = async (negocioId: number): Promise<BusinessHours> => {
     try {
         const config = await prisma.configuracion.findUnique({ where: { negocioId } });
-        if (config && config.horarios) {
-            const horarios = config.horarios as any;
-            // Si tiene formato open/close directo
-            if (horarios.open && horarios.close) {
+        if (config) {
+            // Prioridad: campos dedicados horaApertura/horaCierre
+            if (config.horaApertura && config.horaCierre) {
+                return {
+                    open: config.horaApertura,
+                    close: config.horaCierre,
+                    intervalMinutes: 60,
+                };
+            }
+            // Fallback legacy: formato open/close dentro del JSON horarios
+            const horarios = config.horarios as { open?: string; close?: string; breakStart?: string; breakEnd?: string; intervalMinutes?: number };
+            if (horarios?.open && horarios?.close) {
                 return {
                     open: horarios.open,
                     close: horarios.close,
@@ -115,9 +124,9 @@ export const getAvailableSlots = async (
     endOfDay.setHours(23, 59, 59, 999);
 
     // Filtrar por artista si se proporcionó, sino por todo el negocio
-    const whereClause: any = {
+    const whereClause: Prisma.CitaWhereInput = {
         negocioId,
-        estadoCita: { in: ['CONFIRMADA', 'PENDIENTE'] },
+        estadoCita: { in: [EstadoCita.CONFIRMADA, EstadoCita.PENDIENTE] },
         fechaHoraInicio: { gte: startOfDay, lte: endOfDay }
     };
 

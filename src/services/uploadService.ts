@@ -8,6 +8,10 @@ cloudinary.config({
 
 export type CloudinaryUploadResult = { url: string; publicId: string };
 
+export function deleteFromCloudinary(publicId: string): Promise<void> {
+  return cloudinary.uploader.destroy(publicId).then(() => {});
+}
+
 export function uploadToCloudinary(buffer: Buffer, folder: string): Promise<CloudinaryUploadResult> {
   return new Promise((resolve, reject) => {
     cloudinary.uploader
