@@ -232,6 +232,20 @@ export const cancelarCita = async (req: Request, res: Response) => {
   }
 };
 
+export const getCargaHoraria = async (req: Request, res: Response) => {
+  try {
+    const { artistaId, fecha } = req.query;
+    if (!artistaId || !fecha) {
+      return res.status(400).json({ data: null, error: 'artistaId y fecha son requeridos' });
+    }
+    const data = await CitasService.getCargaHoraria(req.negocioId!, parseInt(artistaId as string), fecha as string);
+    res.json({ data, error: null });
+  } catch (error: unknown) {
+    console.error('Error obteniendo carga horaria:', error);
+    res.status(500).json({ data: null, error: 'Error al obtener carga horaria' });
+  }
+};
+
 export const getArtistasDisponibles = async (req: Request, res: Response) => {
   try {
     const artistas = await getArtistasDelNegocio(req.negocioId!);

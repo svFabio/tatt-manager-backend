@@ -14,7 +14,8 @@ import {
     getDisponibilidad,
     confirmarCita,
     cancelarCita,
-    getArtistasDisponibles
+    getArtistasDisponibles,
+    getCargaHoraria
 } from '../controllers/citas.controller';
 import {
     listarSolicitudes,
@@ -41,6 +42,7 @@ router.put('/:id/no-asistio', marcarNoAsistio);
 router.put('/:id/asistio', marcarAsistio);
 router.put('/:id/descripcion', actualizarDescripcion);
 router.get('/disponibilidad', getDisponibilidad);
+router.get('/carga-horaria', getCargaHoraria);
 router.post('/nueva', crearCitaTatuaje);
 router.patch('/:id/confirmar', confirmarCita);
 router.patch('/:id/cancelar', cancelarCita);
