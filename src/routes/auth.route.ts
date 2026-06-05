@@ -13,6 +13,7 @@ import {
     googleMobileStart,
     googleMobileCallback,
     mobileTokenPoll,
+    googleNativeLogin,
 } from '../controllers/auth.controller';
 import { verificarToken } from '../middleware/auth.middleware';
 
@@ -26,6 +27,7 @@ router.post('/register', registrarConEmail);
 router.post('/login', loginConEmail);
 
 // ── Google Mobile OAuth ──
+router.post('/google-native', googleNativeLogin);
 router.get('/google-mobile', googleMobileStart);
 router.get('/mobile-callback', googleMobileCallback);
 router.get('/mobile-token', mobileTokenPoll);

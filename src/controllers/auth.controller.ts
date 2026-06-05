@@ -168,7 +168,22 @@ export const unirseAEstudio = async (req: Request, res: Response) => {
     }
 };
 
-/* ── Google Mobile OAuth ──────────────────────────────────────────── */
+/* ── Google Mobile OAuth (Native via idToken) ─────────────────── */
+export const googleNativeLogin = async (req: Request, res: Response) => {
+    try {
+        const { idToken } = req.body;
+        if (!idToken) return res.status(400).json({ error: 'idToken es requerido' });
+
+        const result = await AuthService.handleNativeGoogleLogin(idToken);
+        res.json(result);
+    } catch (error: unknown) {
+        console.error('[Auth] Error en googleNativeLogin:', error);
+        const e = asError(error);
+        res.status(e.status || 500).json({ error: e.message || 'Error al autenticar con Google' });
+    }
+};
+
+/* ── Google Mobile OAuth (Redirect Web Browser) ─────────────────── */
 export const googleMobileStart = (req: Request, res: Response) => {
     const { session } = req.query;
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -284,5 +299,15 @@ export const mobileTokenPoll = (req: Request, res: Response) => {
         return res.json({ status: 'expired' });
     }
     mobileTokenStore.delete(session as string);
-    return res.json({ status: 'ready', ...entry.data });
+    
+    // Devolver en el mismo formato que el login estándar para que el frontend no falle
+    return res.json({ 
+        status: 'ready', 
+        token: entry.data.token,
+        usuario: {
+            id: entry.data.userId,
+            nombre: entry.data.userName,
+            email: entry.data.userEmail
+        }
+    });
 };

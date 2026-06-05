@@ -153,6 +153,52 @@ export class AuthService {
         return usuario;
     }
 
+    /* ── Login con Google Nativo (via idToken) ─────────────────── */
+    static async handleNativeGoogleLogin(idToken: string) {
+        const { OAuth2Client } = require('google-auth-library');
+        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+        
+        let ticket;
+        try {
+            ticket = await client.verifyIdToken({
+                idToken,
+                audience: [process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_ANDROID_CLIENT_ID, process.env.GOOGLE_IOS_CLIENT_ID].filter(Boolean) as string[], 
+            });
+        } catch (e) {
+            throw { status: 401, message: 'Token de Google inválido' };
+        }
+        const payload = ticket.getPayload();
+        if (!payload || !payload.email) throw { status: 401, message: 'No se pudo obtener el email de Google' };
+
+        const email = payload.email;
+        const nombre = payload.name || email.split('@')[0];
+        const googleId = payload.sub;
+
+        let usuario = await prisma.usuario.findUnique({ where: { email } });
+        let esNuevo = false;
+
+        if (usuario) {
+            if (!usuario.googleId) {
+                usuario = await prisma.usuario.update({
+                    where: { email },
+                    data: { googleId, authProvider: 'google' },
+                });
+            }
+        } else {
+            esNuevo = true;
+            usuario = await prisma.usuario.create({
+                data: { nombre, email, googleId, authProvider: 'google' },
+            });
+        }
+
+        const token = generarTokenBasico(usuario);
+        return {
+            token,
+            usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email, fotoUrl: usuario.fotoUrl },
+            esNuevo,
+        };
+    }
+
     /* ── Listar estudios del usuario ───────────────────────────── */
     static async getEstudiosUsuario(userId: number) {
         const membresías = await prisma.miembroEstudio.findMany({
